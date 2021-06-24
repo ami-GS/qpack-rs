@@ -1,7 +1,8 @@
+use std::error;
 use std::ops::Index;
 
 use crate::{table::Table, Header};
-use crate::{FieldType, Qnum};
+use crate::{FieldType, Qnum, Setting};
 
 struct Instruction;
 impl Instruction {
@@ -24,8 +25,11 @@ impl Encoder {
             known_received_count: 0,
         }
     }
-    pub fn encode(&self, table: &mut Table, headers: Vec<Header>, use_static: bool) -> Vec<u8> {
+    pub fn encode(&self, table: &mut Table, headers: Vec<Header>, dynamic_table_cap: Option<u32>, use_static: bool) -> Vec<u8> {
         let mut encoded = vec![];
+        if let Some(cap) = dynamic_table_cap {
+            let _ = self.set_dynamic_table_capacity(&mut encoded, cap);
+        }
         self.prefix(&mut encoded, table, 0, false, 0);
 
         for header in headers {
@@ -41,7 +45,15 @@ impl Encoder {
 
         encoded
     }
-
+    fn set_dynamic_table_capacity(&self, encoded: &mut Vec<u8>, cap: u32) -> Result<(), Box<dyn error::Error>> {
+        let len = Qnum::encode(encoded, cap, 5);
+        let wire_len = encoded.len();
+        encoded[wire_len - len] |= Setting::QPACK_MAX_TABLE_CAPACITY;
+        Ok(())
+        // TODO: error handling
+    }
+    fn insert_with_name_reference(&self) {
+    }
     fn prefix(&self, encoded: &mut Vec<u8>, table: &Table, required_insert_count: u32, s_flag: bool, base: u32) {
         Qnum::encode(encoded, required_insert_count, 8);
 

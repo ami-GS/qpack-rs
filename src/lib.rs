@@ -24,8 +24,8 @@ impl Qpack {
         }
     }
 
-    pub fn encode(&mut self, headers: Vec<Header>, use_static: bool) -> Vec<u8> {
-        self.encoder.encode(&mut self.table, headers, use_static)
+    pub fn encode(&mut self, headers: Vec<Header>, dynamic_table_cap: Option<u32>, use_static: bool) -> Vec<u8> {
+        self.encoder.encode(&mut self.table, headers, dynamic_table_cap, use_static)
     }
     pub fn decode<'a>(&'a mut self, wire: &'a Vec<u8>) -> Result<Vec<Header>, Box<dyn error::Error>> {
         self.decoder.decode(wire, &mut self.table)
@@ -167,7 +167,7 @@ mod tests {
 	fn rfc_appendix_b1_encode() {
 		let mut qpack = Qpack::new();
 		let headers = vec![(":path", "/index.html")];
-		let out = qpack.encode(headers, true);
+		let out = qpack.encode(headers, None, true);
 		assert_eq!(out,
 					vec![0x00, 0x00, 0x51, 0x0b, 0x2f,
 						 0x69, 0x6e, 0x64, 0x65, 0x78,
@@ -181,5 +181,22 @@ mod tests {
 								0x2e, 0x68, 0x74, 0x6d, 0x6c];
 		let out = qpack.decode(&wire).unwrap();
 		assert_eq!(out, vec![(":path", "/index.html")]);
+	}
+
+	#[test]
+	fn encode_indexed_simple() {
+		let mut qpack = Qpack::new();
+		let headers = vec![(":path", "/")];
+		let out = qpack.encode(headers, None, true);
+		assert_eq!(out,
+			vec![0x00, 0x00, 0xc1]);
+	}
+	#[test]
+	fn decode_indexed_simple() {
+		let mut qpack = Qpack::new();
+		let wire = vec![0x00, 0x00, 0xc1];
+		let out = qpack.decode(&wire).unwrap();
+		assert_eq!(out,
+			vec![(":path", "/")]);
 	}
 }
