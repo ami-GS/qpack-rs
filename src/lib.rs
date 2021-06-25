@@ -16,11 +16,11 @@ pub struct Qpack {
 }
 
 impl Qpack {
-    pub fn new() -> Self {
+    pub fn new(dynamic_table_max_capacity: usize) -> Self {
         Qpack {
             encoder: Encoder::new(),
             decoder: Decoder::new(),
-            table: Table::new(),
+            table: Table::new(dynamic_table_max_capacity),
         }
     }
 
@@ -165,7 +165,7 @@ mod tests {
 	use crate::Qpack;
 	#[test]
 	fn rfc_appendix_b1_encode() {
-		let mut qpack = Qpack::new();
+		let mut qpack = Qpack::new(1024);
 		let headers = vec![(":path", "/index.html")];
 		let out = qpack.encode(headers, None, true);
 		assert_eq!(out,
@@ -175,7 +175,7 @@ mod tests {
 	}
 	#[test]
 	fn rfc_appendix_b1_decode() {
-		let mut qpack = Qpack::new();
+		let mut qpack = Qpack::new(1024);
 		let wire = vec![0x00, 0x00, 0x51, 0x0b, 0x2f,
 								0x69, 0x6e, 0x64, 0x65, 0x78,
 								0x2e, 0x68, 0x74, 0x6d, 0x6c];
@@ -185,7 +185,7 @@ mod tests {
 
 	#[test]
 	fn encode_indexed_simple() {
-		let mut qpack = Qpack::new();
+		let mut qpack = Qpack::new(1024);
 		let headers = vec![(":path", "/")];
 		let out = qpack.encode(headers, None, true);
 		assert_eq!(out,
@@ -193,7 +193,7 @@ mod tests {
 	}
 	#[test]
 	fn decode_indexed_simple() {
-		let mut qpack = Qpack::new();
+		let mut qpack = Qpack::new(1024);
 		let wire = vec![0x00, 0x00, 0xc1];
 		let out = qpack.decode(&wire).unwrap();
 		assert_eq!(out,

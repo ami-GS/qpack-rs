@@ -1,3 +1,5 @@
+use std::error;
+
 use crate::dynamic_table::DynamicTable;
 use crate::Header;
 
@@ -7,9 +9,9 @@ pub struct Table {
 }
 
 impl<'a> Table {
-    pub fn new() -> Self {
+    pub fn new(max_capacity: usize) -> Self {
         Self {
-            dynamic_table: DynamicTable::new(),
+            dynamic_table: DynamicTable::new(max_capacity),
             static_table: &STATIC_TABLE,
         }
     }
