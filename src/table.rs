@@ -40,11 +40,32 @@ impl<'a> Table {
         (false, 65535) // error for now
     }
 
-    pub fn get_from_static(&self, idx: usize) -> Header<'static> {
-        self.static_table[idx]
+    pub fn get_from_static(&self, idx: usize) -> Result<Header<'static>, Box<dyn error::Error>> {
+        Ok(self.static_table[idx])
     }
-    pub fn get_from_dynamic(&self, idx: usize) -> Header<'a> {
-        ("TODO", "TODO")
+    pub fn get_from_dynamic(&self, idx: usize) -> Result<Header<'a>, Box<dyn error::Error>> {
+        self.dynamic_table.get(idx)
+    }
+    pub fn set_dynamic_table_capacity(&mut self, cap: usize) -> Result<(), Box<dyn error::Error>> {
+        // TODO:
+        // 1. validate cap
+        // 2-1. set cap
+        // 2-2. error handling
+        self.dynamic_table.set_capacity(cap)
+    }
+    pub fn insert_with_name_reference(&mut self, name_idx: usize, value: &str, on_static_table: bool) -> Result<(), Box<dyn error::Error>> {
+        let name = if on_static_table {
+            self.static_table[name_idx].0
+        } else {
+            "NAME_FROM_DYNAMIC_TABLE" // TODO
+        };
+        self.dynamic_table.insert((name, value))
+    }
+    pub fn insert_with_literal_name(&mut self, name: &str, value: &str) -> Result<(), Box<dyn error::Error>> {
+        self.dynamic_table.insert((name, value))
+    }
+    pub fn duplicate(&mut self, index: usize) -> Result<(), Box<dyn error::Error>> {
+        self.dynamic_table.insert(self.get_from_dynamic(index)?)
     }
 
     pub fn get_max_entries(&self) -> u32 {
