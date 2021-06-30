@@ -35,6 +35,25 @@ impl<'a> DynamicTable {
             }
         }
     }
+    pub fn find_index(&self, target: &Header) -> (bool, usize) {
+        let mut candidate_idx = (1 << 32) - 1;
+        if self.current_size == 0 {
+            return (false, candidate_idx);
+        }
+        let mut abs_idx = self.insert_count - 1;
+        for entry in self.list.iter() {
+            if entry.header.0.eq(&target.0) {
+                if entry.header.1.eq(&target.1) {
+                    return (true, abs_idx);
+                }
+                candidate_idx = abs_idx;
+            }
+            if abs_idx != 0 {
+                abs_idx -= 1;
+            }
+        }
+        (false, candidate_idx)
+    }
     pub fn insert(&mut self, header: Header) -> Result<(), Box<dyn error::Error>> {
         let size = header.0.len() + header.1.len();
         if self.capacity < size {
