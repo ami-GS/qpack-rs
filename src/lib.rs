@@ -49,7 +49,7 @@ impl Qnum {
             len += 1;
         }
         encoded.push(val as u8);
-        return len;
+        return len + 1;
     }
     pub fn decode(encoded: &Vec<u8>, idx: usize, n: u8) -> (usize, u32) {
         let mut val: u32 = 0;
