@@ -33,7 +33,7 @@ impl Encoder {
         self.prefix(&mut encoded, table, 0, false, 0);
 
         for header in headers {
-            let (both_match, idx) = table.find_index(&header);
+            let (both_match, on_static, idx) = table.find_index(&header);
             if both_match {
                 self.indexed(&mut encoded, table, idx as u32, true);
                 // self.postBaseIndex(&mut encoded, idx);
