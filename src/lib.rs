@@ -52,20 +52,22 @@ impl Qnum {
         return len + 1;
     }
     pub fn decode(encoded: &Vec<u8>, idx: usize, n: u8) -> (usize, u32) {
-        let mut val: u32 = 0;
-		let mask: u16 = (1 << n) - 1;
+        let mask: u16 = (1 << n) - 1;
         let prefix = encoded[idx] & mask as u8;
         if prefix < mask as u8 {
             return (1, prefix as u32);
         }
         let mut len = 1;
         let mut m = 0;
-        while encoded[idx + len] & 0b10000000 == 0b10000000 {
+        let mut next = true;
+        let mut val = 0;
+        while next {
             val += ((encoded[idx + len] & 0b01111111) as u32) << m;
+            next = encoded[idx + len] & 0b10000000 == 0b10000000;
             m += 7;
             len += 1;
         }
-        (len, val)
+        (len, val + prefix as u32)
     }
 }
 
