@@ -29,7 +29,7 @@ impl<'a> DynamicTable {
     fn evict_upto(&mut self, upto: usize) {
         while upto < self.current_size {
             if let Some(elm) = self.list.pop_back() {
-                self.current_size -= elm.0.len() + elm.1.len();
+                self.current_size -= elm.header.0.len() + elm.header.1.len() + 32;
             } else {
                 // error
             }
@@ -55,7 +55,7 @@ impl<'a> DynamicTable {
         (false, candidate_idx)
     }
     pub fn insert(&mut self, header: Header) -> Result<(), Box<dyn error::Error>> {
-        let size = header.0.len() + header.1.len();
+        let size = header.0.len() + header.1.len() + 32;
         if self.capacity < size {
             return Err(EncoderStreamError.into());
         }
@@ -76,6 +76,7 @@ impl<'a> DynamicTable {
             return Err(EncoderStreamError.into());
         }
         self.evict_upto(cap);
+        self.capacity = cap;
         // error when to set 0. see $3.2.3
         // error when exceed limit as QPACK_ENCODER_STREAM_ERROR?
         // Err(EncoderStreamError.into())
