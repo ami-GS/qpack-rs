@@ -55,7 +55,12 @@ impl Encoder {
     fn insert_with_name_reference(&self) {
     }
     fn prefix(&self, encoded: &mut Vec<u8>, table: &Table, required_insert_count: u32, s_flag: bool, base: u32) {
-        Qnum::encode(encoded, required_insert_count, 8);
+        let encoded_insert_count = if required_insert_count == 0 {
+            required_insert_count
+        } else {
+            required_insert_count % (2 * table.get_max_entries()) + 1
+        };
+        Qnum::encode(encoded, encoded_insert_count, 8);
 
         // S=1: req > base if insert/reference dynamic table
         // S=0: base > req if do not
@@ -67,7 +72,11 @@ impl Encoder {
         } else {
             base - required_insert_count
         };
-        Qnum::encode(encoded, delta_base, 7);
+        let len = Qnum::encode(encoded, delta_base, 7);
+        if s_flag {
+            let wire_len = encoded.len();
+            encoded[wire_len - len] |= 0b10000000;
+        }
     }
 
     fn indexed(&self, encoded: &mut Vec<u8>, table: &mut Table, idx: u32, from_static: bool) {
