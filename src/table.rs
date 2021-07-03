@@ -1,19 +1,29 @@
+use std::cell::RefCell;
 use std::error;
+use std::rc::Rc;
 
 use crate::dynamic_table::DynamicTable;
-use crate::Header;
+use crate::{Header, StrHeader};
 
 pub struct Table {
-    dynamic_table: DynamicTable,
-    static_table: &'static [Header<'static>; 99],
+    pub dynamic_table: Rc<RefCell<DynamicTable>>,
+    pub dynamic_read: Rc<RefCell<DynamicTable>>,
+
+    static_table: &'static [StrHeader<'static>; 99],
 }
 
-impl<'a> Table {
+impl Table {
     pub fn new(max_capacity: usize) -> Self {
+        let dt = Rc::new(RefCell::new(DynamicTable::new(max_capacity)));
+        let ref_dt = Rc::clone(&dt);
         Self {
-            dynamic_table: DynamicTable::new(max_capacity),
+            dynamic_table: dt,
+            dynamic_read: ref_dt,
             static_table: &STATIC_TABLE,
         }
+    }
+    pub fn ack_section(&mut self, section: usize) {
+        (*self.dynamic_table.borrow_mut()).ack_section(section);
     }
 
     // TODO: return (both_matched, on_static_table, idx)
@@ -37,47 +47,59 @@ impl<'a> Table {
             }
         }
 
-        let ret = self.dynamic_table.find_index(target);
+        let ret = (*self.dynamic_read).borrow().find_index(target);
         if ret.1 == not_found_val && static_candidate_idx != not_found_val {
             return (false, true, static_candidate_idx);
         }
         (ret.0, false, ret.1) // (false, false, (1 << 32 - 1)) means not found
     }
 
-    pub fn get_from_static(&self, idx: usize) -> Result<Header<'static>, Box<dyn error::Error>> {
-        Ok(self.static_table[idx])
+    pub fn get_from_static(&self, idx: usize) -> Result<Header, Box<dyn error::Error>> {
+        let header = self.static_table[idx];
+        Ok(Header::from_str_header(header))
     }
-    pub fn get_from_dynamic(&self, idx: usize) -> Result<Header<'a>, Box<dyn error::Error>> {
-        self.dynamic_table.get(idx)
+    pub fn get_from_dynamic(&self, base: usize, idx: usize, post_base: bool) -> Result<Header, Box<dyn error::Error>> {
+        if post_base {
+            (*self.dynamic_read).borrow().get_post_based(base + idx)
+        } else {
+            (*self.dynamic_read).borrow().get(base - idx - 1)
+        }
     }
     pub fn set_dynamic_table_capacity(&mut self, cap: usize) -> Result<(), Box<dyn error::Error>> {
-        // TODO:
-        // 1. validate cap
-        // 2-1. set cap
-        // 2-2. error handling
-        self.dynamic_table.set_capacity(cap)
+        (*self.dynamic_table).borrow_mut().set_capacity(cap)
+        //self.dynamic_table.set_capacity(cap)
     }
-    pub fn insert_with_name_reference(&mut self, name_idx: usize, value: &str, on_static_table: bool) -> Result<(), Box<dyn error::Error>> {
+    pub fn insert_with_name_reference(&mut self, name_idx: usize, value: String, on_static_table: bool) -> Result<(), Box<dyn error::Error>> {
         let name = if on_static_table {
-            self.static_table[name_idx].0
+            self.static_table[name_idx].0.to_string()
         } else {
-            "NAME_FROM_DYNAMIC_TABLE" // TODO
+            self.get_from_dynamic((*self.dynamic_read).borrow().insert_count, name_idx, false)?.0
         };
-        self.dynamic_table.insert((name, value))
+        (*self.dynamic_table).borrow_mut().insert(Header::from_string(name, value))
     }
-    pub fn insert_with_literal_name(&mut self, name: &str, value: &str) -> Result<(), Box<dyn error::Error>> {
-        self.dynamic_table.insert((name, value))
+    pub fn insert_with_literal_name(&mut self, name: String, value: String) -> Result<(), Box<dyn error::Error>> {
+        (*self.dynamic_table).borrow_mut().insert(Header::from_string(name, value))
     }
     pub fn duplicate(&mut self, index: usize) -> Result<(), Box<dyn error::Error>> {
-        self.dynamic_table.insert(self.get_from_dynamic(index)?)
+        // TODO: really?
+        //       abs = insert count - index - 1;
+        //       base is treated as insert count
+        //       the +1 comes from that the "insert count" might include currently comming insert
+        let header = self.get_from_dynamic((*self.dynamic_read).borrow().insert_count, index, false)?;
+        self.insert_with_literal_name(header.0, header.1)
     }
-
     pub fn get_max_entries(&self) -> u32 {
-        (self.dynamic_table.max_capacity as f64 / 32 as f64).floor() as u32
+        ((*self.dynamic_read).borrow().max_capacity as f64 / 32 as f64).floor() as u32
+    }
+    pub fn get_insert_count(&self) -> usize {
+        (*self.dynamic_read).borrow().insert_count
+    }
+    pub fn dump_dynamic_table(&self) {
+        (*self.dynamic_read.borrow()).dump_entries();
     }
 }
 
-const STATIC_TABLE: [Header; 99] = [
+const STATIC_TABLE: [StrHeader; 99] = [
     (":authority", ""),
     (":path", "/"),
     ("age", "0"),

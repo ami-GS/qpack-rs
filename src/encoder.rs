@@ -1,10 +1,10 @@
+use std::collections::HashMap;
 use std::error;
-use std::ops::Index;
 
 use crate::{table::Table, Header};
-use crate::{FieldType, Qnum, Setting};
+use crate::{FieldType, Qnum};
 
-struct Instruction;
+pub struct Instruction;
 impl Instruction {
     pub const SetDynamicTableCapacity: u8 = 0b00100000;
     pub const InsertWithNameReference: u8 = 0b10000000;
@@ -15,45 +15,114 @@ impl Instruction {
 pub struct Encoder {
     // $2.1.1.1
     draining_idx: u32,
-    known_received_count: u32,
+    pub known_sending_count: usize,
+    pub known_received_count: usize,
+    pending_sections: HashMap<u16, usize>, // experimental
 }
 
 impl Encoder {
     pub fn new() -> Self {
         Self {
             draining_idx: 0,
-            known_received_count: 0,
+            known_sending_count: 0,
+            known_received_count: 0, // can be covered by acked_section
+            pending_sections: HashMap::new(),
         }
     }
-    pub fn encode(&self, table: &mut Table, headers: Vec<Header>, dynamic_table_cap: Option<u32>, use_static: bool) -> Vec<u8> {
-        let mut encoded = vec![];
-        if let Some(cap) = dynamic_table_cap {
-            let _ = self.set_dynamic_table_capacity(&mut encoded, cap);
-        }
-        self.prefix(&mut encoded, table, 0, false, 0);
+    pub fn ack_section(&mut self, stream_id: u16) -> usize {
+        // TOOD: remove unwrap
+        let section = self.pending_sections.get(&stream_id).unwrap().clone();
+        self.pending_sections.remove(&stream_id);
+        section
+    }
+    pub fn encode_headers(&mut self, encoded: &mut Vec<u8>, table: &mut Table, relative_indexing: bool, headers: Vec<Header>, stream_id: u16) -> Result<(), Box<dyn error::Error>> {
+        // TODO: decide whether to use s_flag (relative indexing)
+        let required_insert_count = table.get_insert_count();
+        // TODO: suspicious
+        let base = if relative_indexing {
+            (*table.dynamic_read).borrow().acked_section as u32
+        } else {
+            (*table.dynamic_read).borrow().insert_count as u32
+        };
+        self.prefix(encoded, table, required_insert_count as u32, relative_indexing, base);
 
         for header in headers {
             let (both_match, on_static, idx) = table.find_index(&header);
             if both_match {
-                self.indexed(&mut encoded, table, idx as u32, true);
-                // self.postBaseIndex(&mut encoded, idx);
-            } else {
-                //self.literal_literal_name(&mut encoded, &header);
-                self.literal_name_reference(&mut encoded, table, idx as u32, header.1, true);
+                if relative_indexing {
+                    self.indexed_post_base_index(encoded, idx as u32);
+                } else {
+                    let abs_idx = if on_static { idx } else { base as usize - idx - 1 };
+                    self.indexed(encoded, abs_idx as u32, on_static);
+                }
+            } else if idx != (1 << 32) - 1 {
+                if relative_indexing {
+                    self.literal_post_base_name_reference(encoded, idx as u32, &header.1);
+                } {
+                    self.literal_name_reference(encoded, idx as u32, &header.1, on_static);
+                }
+            } else { // not found
+                self.literal_literal_name(encoded, &header);
             }
         }
-
-        encoded
+        self.pending_sections.insert(stream_id, required_insert_count);
+        Ok(())
     }
-    fn set_dynamic_table_capacity(&self, encoded: &mut Vec<u8>, cap: u32) -> Result<(), Box<dyn error::Error>> {
+
+    // Encode Encoder instructions
+    pub fn set_dynamic_table_capacity(&self, encoded: &mut Vec<u8>, cap: u32, table: &mut Table) -> Result<(), Box<dyn error::Error>> {
         let len = Qnum::encode(encoded, cap, 5);
         let wire_len = encoded.len();
-        encoded[wire_len - len] |= Setting::QPACK_MAX_TABLE_CAPACITY;
-        Ok(())
-        // TODO: error handling
+        encoded[wire_len - len] |= Instruction::SetDynamicTableCapacity;
+
+        table.set_dynamic_table_capacity(cap as usize)
     }
-    fn insert_with_name_reference(&self) {
+    pub fn insert_with_name_reference(&self, encoded: &mut Vec<u8>, on_static: bool, name_idx: usize, value: String, table: &mut Table) -> Result<(), Box<dyn error::Error>> {
+        let len = Qnum::encode(encoded, name_idx as u32, 6);
+        let wire_len = encoded.len();
+        if on_static { // "T" bit
+            encoded[wire_len - len] |= 0b01000000;
+        }
+        encoded[wire_len - len] |= Instruction::InsertWithNameReference;
+        // TODO: "H" bit
+        let _ = Qnum::encode(encoded, value.len() as u32, 7);
+        encoded.append(&mut value.as_bytes().to_vec());
+
+        table.insert_with_name_reference(name_idx, value.to_string(), on_static)
     }
+    pub fn insert_with_literal_name(&self, encoded: &mut Vec<u8>, name: String, value: String, table: &mut Table) -> Result<(), Box<dyn error::Error>> {
+        let len = Qnum::encode(encoded, name.len() as u32, 5);
+        let wire_len = encoded.len();
+        encoded[wire_len - len] |= Instruction::InsertWithLiteralName;
+        encoded.append(&mut name.as_bytes().to_vec());
+        let _ = Qnum::encode(encoded, value.len() as u32, 7);
+        encoded.append(&mut value.as_bytes().to_vec());
+
+        table.insert_with_literal_name(name, value)
+    }
+    pub fn duplicate(&self, encoded: &mut Vec<u8>, abs_idx: usize, table: &mut Table) -> Result<(), Box<dyn error::Error>> {
+        let idx = abs_idx;
+        let len  = Qnum::encode(encoded, idx as u32, 5);
+        let wire_len = encoded.len();
+        encoded[wire_len - len] |= Instruction::Duplicate;
+
+        table.duplicate(idx)
+    }
+
+    // Decode Decoder instructions
+    pub fn section_ackowledgment(&self, wire: &Vec<u8>, idx: usize) -> Result<(usize, u16), Box<dyn error::Error>> {
+        let (len, stream_id) = Qnum::decode(wire, idx, 7);
+        Ok((len, stream_id as u16))
+    }
+    pub fn stream_cancellation(&self, wire: &Vec<u8>, idx: usize) -> Result<(usize, u16), Box<dyn error::Error>> {
+        let (len, stream_id) = Qnum::decode(wire, idx, 6);
+        Ok((len, stream_id as u16))
+    }
+    pub fn insert_count_increment(&self, wire: &Vec<u8>, idx: usize) -> Result<(usize, usize), Box<dyn error::Error>> {
+        let (len, increment) = Qnum::decode(wire, idx, 6);
+        Ok((len, increment as usize))
+    }
+
     fn prefix(&self, encoded: &mut Vec<u8>, table: &Table, required_insert_count: u32, s_flag: bool, base: u32) {
         let encoded_insert_count = if required_insert_count == 0 {
             required_insert_count
@@ -79,7 +148,7 @@ impl Encoder {
         }
     }
 
-    fn indexed(&self, encoded: &mut Vec<u8>, table: &mut Table, idx: u32, from_static: bool) {
+    fn indexed(&self, encoded: &mut Vec<u8>, idx: u32, from_static: bool) {
         let len = Qnum::encode(encoded, idx, 6);
         let wire_len = encoded.len();
         encoded[wire_len - len] |= FieldType::Indexed;
@@ -96,7 +165,6 @@ impl Encoder {
     fn literal_name_reference(
         &self,
         encoded: &mut Vec<u8>,
-        table: &mut Table,
         idx: u32,
         value: &str,
         from_static: bool,
@@ -122,7 +190,7 @@ impl Encoder {
         let _ = Qnum::encode(encoded, value.len() as u32, 7);
         encoded.append(&mut value.as_bytes().to_vec());
     }
-    fn literal_literal_name(&self, encoded: &mut Vec<u8>, header: &(&str, &str)) {
+    fn literal_literal_name(&self, encoded: &mut Vec<u8>, header: &Header) {
         // TODO: "N", "H" bit?
         let len = Qnum::encode(encoded, header.0.len() as u32, 3);
         let wire_len  = encoded.len();
