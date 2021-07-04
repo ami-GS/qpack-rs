@@ -97,9 +97,6 @@ impl DynamicTable {
         // TODO: error
         Ok(Header::from("NOT_FOUND", "NOT_FOUND"))
     }
-    pub fn get_post_based(&self, idx: usize) -> Result<Header, Box<dyn error::Error>> {
-        self.get(self.insert_count - idx - 1)
-    }
     pub fn set_capacity(&mut self, cap: usize) -> Result<(), Box<dyn error::Error>> {
         if self.max_capacity < cap {
             return Err(EncoderStreamError.into());

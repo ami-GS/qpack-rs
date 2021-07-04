@@ -60,7 +60,7 @@ impl Table {
     }
     pub fn get_from_dynamic(&self, base: usize, idx: usize, post_base: bool) -> Result<Header, Box<dyn error::Error>> {
         if post_base {
-            (*self.dynamic_read).borrow().get_post_based(base + idx)
+            (*self.dynamic_read).borrow().get(base + idx)
         } else {
             (*self.dynamic_read).borrow().get(base - idx - 1)
         }
