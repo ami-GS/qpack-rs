@@ -99,15 +99,15 @@ impl Qpack {
         let mut headers = vec![];
         let wire_len = wire.len();
         while idx < wire_len {
-            let ret = if wire[idx] & FieldType::Indexed == FieldType::Indexed {
+            let ret = if wire[idx] & FieldType::INDEXED == FieldType::INDEXED {
                 self.decoder.indexed(wire, idx, base, &self.table)?
-            } else if wire[idx] & FieldType::LiteralNameReference == FieldType::LiteralNameReference {
+            } else if wire[idx] & FieldType::LITERAL_NAME_REFERENCE == FieldType::LITERAL_NAME_REFERENCE {
                 self.decoder.literal_name_reference(wire, idx, base, &self.table)?
-            } else if wire[idx] & FieldType::LiteralLiteralName == FieldType::LiteralLiteralName {
+            } else if wire[idx] & FieldType::LITERAL_LITERAL_NAME == FieldType::LITERAL_LITERAL_NAME {
                 self.decoder.literal_literal_name(wire, idx)?
-            } else if wire[idx] & FieldType::IndexedPostBaseIndex == FieldType::IndexedPostBaseIndex {
+            } else if wire[idx] & FieldType::INDEXED_POST_BASE_INDEX == FieldType::INDEXED_POST_BASE_INDEX {
                 self.decoder.indexed_post_base_index(wire, idx, base, &self.table)?
-            } else if wire[idx] & 0b11110000 == FieldType::LiteralPostBaseNameReference {
+            } else if wire[idx] & 0b11110000 == FieldType::LITERAL_POST_BASE_NAME_REFERENCE {
                 self.decoder.literal_post_base_name_reference(wire, idx, base, &self.table)?
             } else {
                 return Err(DecompressionFailed.into());
@@ -122,13 +122,13 @@ impl Qpack {
         let mut idx = 0;
         let wire_len = wire.len();
         while idx < wire_len {
-            idx += if wire[idx] & encoder::Instruction::InsertWithNameReference == encoder::Instruction::InsertWithNameReference {
+            idx += if wire[idx] & encoder::Instruction::INSERT_WITH_NAME_REFERENCE == encoder::Instruction::INSERT_WITH_NAME_REFERENCE {
                 self.decoder.insert_with_name_reference(wire, idx, &mut self.table)?
-            } else if wire[idx] & encoder::Instruction::InsertWithLiteralName == encoder::Instruction::InsertWithLiteralName {
+            } else if wire[idx] & encoder::Instruction::INSERT_WITH_LITERAL_NAME == encoder::Instruction::INSERT_WITH_LITERAL_NAME {
                 self.decoder.insert_with_literal_name(wire, idx, &mut self.table)?
-            } else if wire[idx] & encoder::Instruction::SetDynamicTableCapacity == encoder::Instruction::SetDynamicTableCapacity {
+            } else if wire[idx] & encoder::Instruction::SET_DYNAMIC_TABLE_CAPACITY == encoder::Instruction::SET_DYNAMIC_TABLE_CAPACITY {
                 self.decoder.dynamic_table_capacity(wire, idx, &mut self.table)?
-            } else { // if wire[idx] & encoder::Instruction::Duplicate == encoder::Instruction::Duplicate
+            } else { // if wire[idx] & encoder::Instruction::DUPLICATE == encoder::Instruction::DUPLICATE
                 self.decoder.duplicate(wire, idx, &mut self.table)?
             };
         }
@@ -138,17 +138,17 @@ impl Qpack {
         let mut idx = 0;
         let wire_len = wire.len();
         while idx < wire_len {
-            idx += if wire[idx] & decoder::Instruction::SectionAcknowledgment == decoder::Instruction::SectionAcknowledgment {
+            idx += if wire[idx] & decoder::Instruction::SECTION_ACKNOWLEDGMENT == decoder::Instruction::SECTION_ACKNOWLEDGMENT {
                 let (len, stream_id) = self.encoder.section_ackowledgment(wire, idx)?;
 
                 let section = self.encoder.ack_section(stream_id);
                 self.table.ack_section(section);
                 len
-            } else if wire[idx] & decoder::Instruction::StreamCancellation == decoder::Instruction::StreamCancellation {
+            } else if wire[idx] & decoder::Instruction::STREAM_CANCELLATION == decoder::Instruction::STREAM_CANCELLATION {
                 let (len, _stream_id) = self.encoder.stream_cancellation(wire, idx)?;
                 // TODO: manage stream_id
                 len
-            } else { // wire[idx] & Instruction::InsertCountIncrement == Instruction::InsertCountIncrement
+            } else { // wire[idx] & Instruction::INSERT_COUNT_INCREMENT == Instruction::INSERT_COUNT_INCREMENT
                 let (len, increment) = self.encoder.insert_count_increment(wire, idx)?;
                 if increment == 0 || self.encoder.known_sending_count < (*self.table.dynamic_read).borrow().acked_section + increment {
                     return Err(DecoderStreamError.into());
@@ -210,13 +210,13 @@ impl FieldType {
     // +---+---+---+---+---+---+---+---+
     // | 1 | T |      Index (6+)       |
     // +---+---+-----------------------+
-    pub const Indexed: u8 = 0b10000000;
+    pub const INDEXED: u8 = 0b10000000;
     // 4.5.3
     // 0   1   2   3   4   5   6   7
     // +---+---+---+---+---+---+---+---+
     // | 0 | 0 | 0 | 1 |  Index (4+)   |
     // +---+---+---+---+---------------+
-    pub const IndexedPostBaseIndex: u8 = 0b00010000;
+    pub const INDEXED_POST_BASE_INDEX: u8 = 0b00010000;
     // 4.5.4
     // 0   1   2   3   4   5   6   7
     // +---+---+---+---+---+---+---+---+
@@ -226,7 +226,7 @@ impl FieldType {
     // +---+---------------------------+
     // |  Value String (Length bytes)  |
     // +-------------------------------+
-    pub const LiteralNameReference: u8 = 0b01000000;
+    pub const LITERAL_NAME_REFERENCE: u8 = 0b01000000;
     // 4.5.5
     // 0   1   2   3   4   5   6   7
     // +---+---+---+---+---+---+---+---+
@@ -236,7 +236,7 @@ impl FieldType {
     // +---+---------------------------+
     // |  Value String (Length bytes)  |
     // +-------------------------------+
-    pub const LiteralPostBaseNameReference: u8 = 0b00000000;
+    pub const LITERAL_POST_BASE_NAME_REFERENCE: u8 = 0b00000000;
     // 4.5.6
     // 0   1   2   3   4   5   6   7
     // +---+---+---+---+---+---+---+---+
@@ -248,14 +248,7 @@ impl FieldType {
     // +---+---------------------------+
     // |  Value String (Length bytes)  |
     // +-------------------------------+
-    pub const LiteralLiteralName: u8 = 0b00100000;
-}
-
-struct Setting;
-
-impl Setting {
-    pub const QPACK_MAX_TABLE_CAPACITY: u8 = 0x01;
-    pub const QPACK_BLOCKED_STREAMS: u8 = 0x07;
+    pub const LITERAL_LITERAL_NAME: u8 = 0b00100000;
 }
 
 #[derive(Debug)]
@@ -282,20 +275,11 @@ impl fmt::Display for DecoderStreamError {
 		write!(f, "Decoder Stream Error")
 	}
 }
-
-struct Stream;
-
-impl Stream {
-    pub const QPACK_ENCODER_STREAM: u8 = 0x02;
-    pub const QPACK_DECODER_STREAM: u8 = 0x03;
-}
-
 // StrHeader will be implemented later once all works
 // I assume &str header's would be slow due to page fault
 type StrHeader<'a> = (&'a str, &'a str);
 #[derive(PartialEq, Eq, Debug)]
 pub struct Header(String, String);
-type DynamicHeader = (String, String);
 
 impl Header {
     pub fn from(name: &str, value: &str) -> Self {

@@ -5,7 +5,7 @@ use crate::{EncoderStreamError, Header};
 pub struct Entry {
     pub header: Header,
     // Absolute index
-    index: usize,
+    _index: usize,
 }
 pub struct DynamicTable {
     pub list: LinkedList<Entry>,
@@ -81,7 +81,7 @@ impl DynamicTable {
         // copy before eviction to avoid referenced entry to be deleted;
         // let dyn_header = (header.0.to_string(), header.1.to_string());
         self.evict_upto(self.capacity - size);
-        self.list.push_front(Entry{header: header, index: self.insert_count});
+        self.list.push_front(Entry{header: header, _index: self.insert_count});
         self.insert_count += 1;
         self.current_size += size;
         Ok(())

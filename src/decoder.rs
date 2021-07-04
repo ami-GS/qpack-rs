@@ -4,13 +4,13 @@ use crate::{DecompressionFailed, Header, Qnum, table::Table};
 
 pub struct Instruction;
 impl Instruction {
-    pub const SectionAcknowledgment: u8 = 0b10000000;
-    pub const StreamCancellation: u8 = 0b01000000;
-    pub const InsertCountIncrement: u8 = 0b00000000;
+    pub const SECTION_ACKNOWLEDGMENT: u8 = 0b10000000;
+    pub const STREAM_CANCELLATION: u8 = 0b01000000;
+    pub const _INSERT_COUNT_INCREMENT: u8 = 0b00000000;
 }
 
 pub struct Decoder {
-    size: usize,
+    _size: usize,
     pub known_received_count: u32,
     pub pending_sections: HashMap<u16, usize>, // experimental
 }
@@ -18,12 +18,12 @@ pub struct Decoder {
 impl Decoder {
     pub fn new() -> Self {
         Self {
-            size: 0,
+            _size: 0,
             known_received_count: 0,
             pending_sections: HashMap::new(),
         }
     }
-    pub fn get_known_received_count(&self) -> u32 {
+    pub fn _get_known_received_count(&self) -> u32 {
         self.known_received_count
     }
 
@@ -67,7 +67,7 @@ impl Decoder {
         // TODO: double check streamID's max length
         let len = Qnum::encode(encoded, stream_id as u32, 7);
         let wire_len = encoded.len();
-        encoded[wire_len - len] |= Instruction::SectionAcknowledgment;
+        encoded[wire_len - len] |= Instruction::SECTION_ACKNOWLEDGMENT;
 
         let section = self.pending_sections.get(&stream_id).unwrap();
         (*table.dynamic_table).borrow_mut().ack_section(*section);
@@ -77,7 +77,7 @@ impl Decoder {
         // TODO: double check streamID's max length
         let len = Qnum::encode(encoded, stream_id as u32, 6);
         let wire_len = encoded.len();
-        encoded[wire_len - len] |= Instruction::StreamCancellation;
+        encoded[wire_len - len] |= Instruction::STREAM_CANCELLATION;
         Ok(())
     }
     pub fn insert_count_increment(&self, encoded: &mut Vec<u8>, increment: usize) -> Result<(), Box<dyn error::Error>> {

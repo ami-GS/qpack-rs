@@ -6,15 +6,15 @@ use crate::{FieldType, Qnum};
 
 pub struct Instruction;
 impl Instruction {
-    pub const SetDynamicTableCapacity: u8 = 0b00100000;
-    pub const InsertWithNameReference: u8 = 0b10000000;
-    pub const InsertWithLiteralName: u8 = 0b01000000;
-    pub const Duplicate: u8 = 0b00000000;
+    pub const SET_DYNAMIC_TABLE_CAPACITY: u8 = 0b00100000;
+    pub const INSERT_WITH_NAME_REFERENCE: u8 = 0b10000000;
+    pub const INSERT_WITH_LITERAL_NAME: u8 = 0b01000000;
+    pub const DUPLICATE: u8 = 0b00000000;
 }
 
 pub struct Encoder {
     // $2.1.1.1
-    draining_idx: u32,
+    _draining_idx: u32,
     pub known_sending_count: usize,
     pub known_received_count: usize,
     pub pending_sections: HashMap<u16, usize>, // experimental
@@ -23,7 +23,7 @@ pub struct Encoder {
 impl Encoder {
     pub fn new() -> Self {
         Self {
-            draining_idx: 0,
+            _draining_idx: 0,
             known_sending_count: 0,
             known_received_count: 0, // can be covered by acked_section
             pending_sections: HashMap::new(),
@@ -40,7 +40,7 @@ impl Encoder {
     pub fn set_dynamic_table_capacity(&self, encoded: &mut Vec<u8>, cap: u32, table: &mut Table) -> Result<(), Box<dyn error::Error>> {
         let len = Qnum::encode(encoded, cap, 5);
         let wire_len = encoded.len();
-        encoded[wire_len - len] |= Instruction::SetDynamicTableCapacity;
+        encoded[wire_len - len] |= Instruction::SET_DYNAMIC_TABLE_CAPACITY;
 
         table.set_dynamic_table_capacity(cap as usize)
     }
@@ -50,7 +50,7 @@ impl Encoder {
         if on_static { // "T" bit
             encoded[wire_len - len] |= 0b01000000;
         }
-        encoded[wire_len - len] |= Instruction::InsertWithNameReference;
+        encoded[wire_len - len] |= Instruction::INSERT_WITH_NAME_REFERENCE;
         // TODO: "H" bit
         let _ = Qnum::encode(encoded, value.len() as u32, 7);
         encoded.append(&mut value.as_bytes().to_vec());
@@ -60,18 +60,17 @@ impl Encoder {
     pub fn insert_with_literal_name(&self, encoded: &mut Vec<u8>, name: String, value: String, table: &mut Table) -> Result<(), Box<dyn error::Error>> {
         let len = Qnum::encode(encoded, name.len() as u32, 5);
         let wire_len = encoded.len();
-        encoded[wire_len - len] |= Instruction::InsertWithLiteralName;
+        encoded[wire_len - len] |= Instruction::INSERT_WITH_LITERAL_NAME;
         encoded.append(&mut name.as_bytes().to_vec());
         let _ = Qnum::encode(encoded, value.len() as u32, 7);
         encoded.append(&mut value.as_bytes().to_vec());
 
         table.insert_with_literal_name(name, value)
     }
-    pub fn duplicate(&self, encoded: &mut Vec<u8>, abs_idx: usize, table: &mut Table) -> Result<(), Box<dyn error::Error>> {
-        let idx = abs_idx;
+    pub fn duplicate(&self, encoded: &mut Vec<u8>, idx: usize, table: &mut Table) -> Result<(), Box<dyn error::Error>> {
         let len  = Qnum::encode(encoded, idx as u32, 5);
         let wire_len = encoded.len();
-        encoded[wire_len - len] |= Instruction::Duplicate;
+        encoded[wire_len - len] |= Instruction::DUPLICATE;
 
         table.duplicate(idx)
     }
@@ -118,7 +117,7 @@ impl Encoder {
     pub fn indexed(&self, encoded: &mut Vec<u8>, idx: u32, from_static: bool) {
         let len = Qnum::encode(encoded, idx, 6);
         let wire_len = encoded.len();
-        encoded[wire_len - len] |= FieldType::Indexed;
+        encoded[wire_len - len] |= FieldType::INDEXED;
         if from_static {
             let wire_len = encoded.len();
             encoded[wire_len - len] |= 0b01000000;
@@ -127,7 +126,7 @@ impl Encoder {
     pub fn indexed_post_base_index(&self, encoded: &mut Vec<u8>, idx: u32) {
         let len = Qnum::encode(encoded, idx, 4);
         let wire_len = encoded.len();
-        encoded[wire_len - len] |= FieldType::IndexedPostBaseIndex;
+        encoded[wire_len - len] |= FieldType::INDEXED_POST_BASE_INDEX;
     }
     pub fn literal_name_reference(
         &self,
@@ -139,7 +138,7 @@ impl Encoder {
         // TODO: "N" bit?
         let len = Qnum::encode(encoded, idx, 4);
         let wire_len = encoded.len();
-        encoded[wire_len - len] |= FieldType::LiteralNameReference;
+        encoded[wire_len - len] |= FieldType::LITERAL_NAME_REFERENCE;
         if from_static {
             let wire_len = encoded.len();
             encoded[wire_len - len] |= 0b00010000;
@@ -152,7 +151,7 @@ impl Encoder {
         // TODO: "N" bit?
         let len = Qnum::encode(encoded, idx, 3);
         let wire_len = encoded.len();
-        encoded[wire_len - len] |= FieldType::LiteralPostBaseNameReference;
+        encoded[wire_len - len] |= FieldType::LITERAL_POST_BASE_NAME_REFERENCE;
         // TODO: "H" bit?
         let _ = Qnum::encode(encoded, value.len() as u32, 7);
         encoded.append(&mut value.as_bytes().to_vec());
@@ -161,7 +160,7 @@ impl Encoder {
         // TODO: "N", "H" bit?
         let len = Qnum::encode(encoded, header.0.len() as u32, 3);
         let wire_len  = encoded.len();
-        encoded[wire_len - len] |= FieldType::LiteralLiteralName;
+        encoded[wire_len - len] |= FieldType::LITERAL_LITERAL_NAME;
         encoded.append(&mut header.0.as_bytes().to_vec());
         // TODO: "H" bit?
         let _ = Qnum::encode(encoded, header.1.len() as u32, 7);
