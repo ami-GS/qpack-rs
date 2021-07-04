@@ -17,7 +17,7 @@ pub struct Encoder {
     draining_idx: u32,
     pub known_sending_count: usize,
     pub known_received_count: usize,
-    pending_sections: HashMap<u16, usize>, // experimental
+    pub pending_sections: HashMap<u16, usize>, // experimental
 }
 
 impl Encoder {
@@ -34,39 +34,6 @@ impl Encoder {
         let section = self.pending_sections.get(&stream_id).unwrap().clone();
         self.pending_sections.remove(&stream_id);
         section
-    }
-    pub fn encode_headers(&mut self, encoded: &mut Vec<u8>, table: &mut Table, relative_indexing: bool, headers: Vec<Header>, stream_id: u16) -> Result<(), Box<dyn error::Error>> {
-        // TODO: decide whether to use s_flag (relative indexing)
-        let required_insert_count = table.get_insert_count();
-        // TODO: suspicious
-        let base = if relative_indexing {
-            (*table.dynamic_read).borrow().acked_section as u32
-        } else {
-            (*table.dynamic_read).borrow().insert_count as u32
-        };
-        self.prefix(encoded, table, required_insert_count as u32, relative_indexing, base);
-
-        for header in headers {
-            let (both_match, on_static, idx) = table.find_index(&header);
-            if both_match {
-                if relative_indexing {
-                    self.indexed_post_base_index(encoded, idx as u32);
-                } else {
-                    let abs_idx = if on_static { idx } else { base as usize - idx - 1 };
-                    self.indexed(encoded, abs_idx as u32, on_static);
-                }
-            } else if idx != (1 << 32) - 1 {
-                if relative_indexing {
-                    self.literal_post_base_name_reference(encoded, idx as u32, &header.1);
-                } {
-                    self.literal_name_reference(encoded, idx as u32, &header.1, on_static);
-                }
-            } else { // not found
-                self.literal_literal_name(encoded, &header);
-            }
-        }
-        self.pending_sections.insert(stream_id, required_insert_count);
-        Ok(())
     }
 
     // Encode Encoder instructions
@@ -123,7 +90,7 @@ impl Encoder {
         Ok((len, increment as usize))
     }
 
-    fn prefix(&self, encoded: &mut Vec<u8>, table: &Table, required_insert_count: u32, s_flag: bool, base: u32) {
+    pub fn prefix(&self, encoded: &mut Vec<u8>, table: &Table, required_insert_count: u32, s_flag: bool, base: u32) {
         let encoded_insert_count = if required_insert_count == 0 {
             required_insert_count
         } else {
@@ -148,7 +115,7 @@ impl Encoder {
         }
     }
 
-    fn indexed(&self, encoded: &mut Vec<u8>, idx: u32, from_static: bool) {
+    pub fn indexed(&self, encoded: &mut Vec<u8>, idx: u32, from_static: bool) {
         let len = Qnum::encode(encoded, idx, 6);
         let wire_len = encoded.len();
         encoded[wire_len - len] |= FieldType::Indexed;
@@ -157,12 +124,12 @@ impl Encoder {
             encoded[wire_len - len] |= 0b01000000;
         }
     }
-    fn indexed_post_base_index(&self, encoded: &mut Vec<u8>, idx: u32) {
+    pub fn indexed_post_base_index(&self, encoded: &mut Vec<u8>, idx: u32) {
         let len = Qnum::encode(encoded, idx, 4);
         let wire_len = encoded.len();
         encoded[wire_len - len] |= FieldType::IndexedPostBaseIndex;
     }
-    fn literal_name_reference(
+    pub fn literal_name_reference(
         &self,
         encoded: &mut Vec<u8>,
         idx: u32,
@@ -181,7 +148,7 @@ impl Encoder {
         let _ = Qnum::encode(encoded, value.len() as u32, 7);
         encoded.append(&mut value.as_bytes().to_vec());
     }
-    fn literal_post_base_name_reference(&self, encoded: &mut Vec<u8>, idx: u32, value: &str) {
+    pub fn literal_post_base_name_reference(&self, encoded: &mut Vec<u8>, idx: u32, value: &str) {
         // TODO: "N" bit?
         let len = Qnum::encode(encoded, idx, 3);
         let wire_len = encoded.len();
@@ -190,7 +157,7 @@ impl Encoder {
         let _ = Qnum::encode(encoded, value.len() as u32, 7);
         encoded.append(&mut value.as_bytes().to_vec());
     }
-    fn literal_literal_name(&self, encoded: &mut Vec<u8>, header: &Header) {
+    pub fn literal_literal_name(&self, encoded: &mut Vec<u8>, header: &Header) {
         // TODO: "N", "H" bit?
         let len = Qnum::encode(encoded, header.0.len() as u32, 3);
         let wire_len  = encoded.len();

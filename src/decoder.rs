@@ -1,6 +1,6 @@
 use std::{collections::HashMap, error};
 
-use crate::{DecompressionFailed, FieldType, Header, Qnum, table::Table};
+use crate::{DecompressionFailed, Header, Qnum, table::Table};
 
 pub struct Instruction;
 impl Instruction {
@@ -12,7 +12,7 @@ impl Instruction {
 pub struct Decoder {
     size: usize,
     pub known_received_count: u32,
-    pending_sections: HashMap<u16, usize>, // experimental
+    pub pending_sections: HashMap<u16, usize>, // experimental
 }
 
 impl Decoder {
@@ -25,36 +25,6 @@ impl Decoder {
     }
     pub fn get_known_received_count(&self) -> u32 {
         self.known_received_count
-    }
-    pub fn decode_headers(&mut self, wire: &Vec<u8>, table: &mut Table, stream_id: u16) -> Result<Vec<Header>, Box<dyn error::Error>> {
-        let mut idx = 0;
-        let (len, requred_insert_count, base) = self.prefix(wire, idx, table)?;
-        idx += len;
-
-        // blocked if dynamic_table.insert_count < requred_insert_count
-        // blocked just before referencing dynamic_table is better?
-
-        let mut headers = vec![];
-        let wire_len = wire.len();
-        while idx < wire_len {
-            let ret = if wire[idx] & FieldType::Indexed == FieldType::Indexed {
-                self.indexed(wire, idx, base, table)?
-            } else if wire[idx] & FieldType::LiteralNameReference == FieldType::LiteralNameReference {
-                self.literal_name_reference(wire, idx, base, table)?
-            } else if wire[idx] & FieldType::LiteralLiteralName == FieldType::LiteralLiteralName {
-                self.literal_literal_name(wire, idx, table)?
-            } else if wire[idx] & FieldType::IndexedPostBaseIndex == FieldType::IndexedPostBaseIndex {
-                self.indexed_post_base_index(wire, idx, base, table)?
-            } else if wire[idx] & 0b11110000 == FieldType::LiteralPostBaseNameReference {
-                self.literal_post_base_name_reference(wire, idx, base, table)?
-            } else {
-                return Err(DecompressionFailed.into());
-            };
-            idx += ret.0;
-            headers.push(ret.1);
-        }
-        self.pending_sections.insert(stream_id, requred_insert_count as usize);
-        Ok(headers)
     }
 
     // Decode Encoder instructions
@@ -115,7 +85,7 @@ impl Decoder {
         Ok(())
     }
 
-    fn prefix(&self, wire: &Vec<u8>, idx: usize, table: &Table) -> Result<(usize, u32, usize), Box<dyn error::Error>> {
+    pub fn prefix(&self, wire: &Vec<u8>, idx: usize, table: &Table) -> Result<(usize, u32, usize), Box<dyn error::Error>> {
         let (len1, encoded_insert_count) = Qnum::decode(wire, idx, 8);
 
         // # 4.5.1.1
@@ -154,7 +124,7 @@ impl Decoder {
         Ok((len1 + len2, required_insert_count, base as usize))
     }
 
-    fn indexed(&self, wire: &Vec<u8>, idx: usize, base: usize, table: &Table) -> Result<(usize, Header), Box<dyn error::Error>> {
+    pub fn indexed(&self, wire: &Vec<u8>, idx: usize, base: usize, table: &Table) -> Result<(usize, Header), Box<dyn error::Error>> {
         let (len, table_idx) = Qnum::decode(wire, idx, 6);
 
         Ok(
@@ -166,7 +136,7 @@ impl Decoder {
         )
     }
 
-    fn literal_name_reference(&self, wire: &Vec<u8>, idx: usize, base: usize, table: &Table) -> Result<(usize, Header), Box<dyn error::Error>> {
+    pub fn literal_name_reference(&self, wire: &Vec<u8>, idx: usize, base: usize, table: &Table) -> Result<(usize, Header), Box<dyn error::Error>> {
         let (len1, table_idx) = Qnum::decode(wire, idx, 4);
 
         let header = if wire[idx] & 0b00010000 == 0b00010000 {
@@ -183,7 +153,7 @@ impl Decoder {
         Ok((len1 + len2 + value_length as usize, Header::from_string(header.0, value.to_string())))
     }
 
-    fn literal_literal_name(&self, wire: &Vec<u8>, idx: usize, _table: &Table) -> Result<(usize, Header), Box<dyn error::Error>> {
+    pub fn literal_literal_name(&self, wire: &Vec<u8>, idx: usize) -> Result<(usize, Header), Box<dyn error::Error>> {
         let (len1, name_length) = Qnum::decode(wire, idx, 3);
         let name = std::str::from_utf8(
             &wire[(idx + len1)..(idx + len1 + name_length as usize)],
@@ -195,13 +165,13 @@ impl Decoder {
         Ok((len1 + len2 + name_length as usize + value_length as usize, Header::from(name, value)))
     }
 
-    fn indexed_post_base_index(&self, wire: &Vec<u8>, idx: usize, base: usize, table: &Table) -> Result<(usize, Header), Box<dyn error::Error>> {
+    pub fn indexed_post_base_index(&self, wire: &Vec<u8>, idx: usize, base: usize, table: &Table) -> Result<(usize, Header), Box<dyn error::Error>> {
         let (len1, table_idx) = Qnum::decode(wire, idx, 4);
         let header = table.get_from_dynamic(base, table_idx as usize, true)?;
         Ok((len1, header))
     }
 
-    fn literal_post_base_name_reference(&self, wire: &Vec<u8>, idx: usize, base: usize, table: &Table) -> Result<(usize, Header), Box<dyn error::Error>> {
+    pub fn literal_post_base_name_reference(&self, wire: &Vec<u8>, idx: usize, base: usize, table: &Table) -> Result<(usize, Header), Box<dyn error::Error>> {
         let (len1, table_idx) = Qnum::decode(wire, idx, 3);
         let header = table.get_from_dynamic(base, table_idx as usize, true)?;
         let (len2, value_length) = Qnum::decode(wire, idx + len1, 7);

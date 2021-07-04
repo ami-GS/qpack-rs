@@ -56,10 +56,67 @@ impl Qpack {
         Ok(out)
     }
     pub fn encode_headers(&mut self, encoded: &mut Vec<u8>, relative_indexing: bool, headers: Vec<Header>, stream_id: u16) -> Result<(), Box<dyn error::Error>> {
-        self.encoder.encode_headers(encoded, &mut self.table, relative_indexing, headers, stream_id)
+        // TODO: decide whether to use s_flag (relative indexing)
+        let required_insert_count = self.table.get_insert_count();
+        // TODO: suspicious
+        let base = if relative_indexing {
+            (*self.table.dynamic_read).borrow().acked_section as u32
+        } else {
+            (*self.table.dynamic_read).borrow().insert_count as u32
+        };
+        self.encoder.prefix(encoded, &self.table, required_insert_count as u32, relative_indexing, base);
+
+        for header in headers {
+            let (both_match, on_static, idx) = self.table.find_index(&header);
+            if both_match {
+                if relative_indexing {
+                    self.encoder.indexed_post_base_index(encoded, idx as u32);
+                } else {
+                    let abs_idx = if on_static { idx } else { base as usize - idx - 1 };
+                    self.encoder.indexed(encoded, abs_idx as u32, on_static);
+                }
+            } else if idx != (1 << 32) - 1 {
+                if relative_indexing {
+                    self.encoder.literal_post_base_name_reference(encoded, idx as u32, &header.1);
+                } {
+                    self.encoder.literal_name_reference(encoded, idx as u32, &header.1, on_static);
+                }
+            } else { // not found
+                self.encoder.literal_literal_name(encoded, &header);
+            }
+        }
+        self.encoder.pending_sections.insert(stream_id, required_insert_count);
+        Ok(())
     }
     pub fn decode_headers(&mut self, wire: &Vec<u8>, stream_id: u16) -> Result<Vec<Header>, Box<dyn error::Error>> {
-        self.decoder.decode_headers(wire, &mut self.table, stream_id)
+        let mut idx = 0;
+        let (len, requred_insert_count, base) = self.decoder.prefix(wire, idx, &self.table)?;
+        idx += len;
+
+        // blocked if dynamic_table.insert_count < requred_insert_count
+        // blocked just before referencing dynamic_table is better?
+
+        let mut headers = vec![];
+        let wire_len = wire.len();
+        while idx < wire_len {
+            let ret = if wire[idx] & FieldType::Indexed == FieldType::Indexed {
+                self.decoder.indexed(wire, idx, base, &self.table)?
+            } else if wire[idx] & FieldType::LiteralNameReference == FieldType::LiteralNameReference {
+                self.decoder.literal_name_reference(wire, idx, base, &self.table)?
+            } else if wire[idx] & FieldType::LiteralLiteralName == FieldType::LiteralLiteralName {
+                self.decoder.literal_literal_name(wire, idx)?
+            } else if wire[idx] & FieldType::IndexedPostBaseIndex == FieldType::IndexedPostBaseIndex {
+                self.decoder.indexed_post_base_index(wire, idx, base, &self.table)?
+            } else if wire[idx] & 0b11110000 == FieldType::LiteralPostBaseNameReference {
+                self.decoder.literal_post_base_name_reference(wire, idx, base, &self.table)?
+            } else {
+                return Err(DecompressionFailed.into());
+            };
+            idx += ret.0;
+            headers.push(ret.1);
+        }
+        self.decoder.pending_sections.insert(stream_id, requred_insert_count as usize);
+        Ok(headers)
     }
     pub fn decode_encoder_instruction(&mut self, wire: &Vec<u8>) -> Result<(), Box<dyn error::Error>> {
         let mut idx = 0;
