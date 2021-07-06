@@ -141,10 +141,7 @@ impl Qpack {
         let wire_len = wire.len();
         while idx < wire_len {
             idx += if wire[idx] & decoder::Instruction::SECTION_ACKNOWLEDGMENT == decoder::Instruction::SECTION_ACKNOWLEDGMENT {
-                let (len, stream_id) = self.encoder.section_ackowledgment(wire, idx)?;
-
-                let section = self.encoder.ack_section(stream_id);
-                self.table.ack_section(section);
+                let (len, _stream_id) = self.encoder.section_ackowledgment(wire, idx, &mut self.table)?;
                 len
             } else if wire[idx] & decoder::Instruction::STREAM_CANCELLATION == decoder::Instruction::STREAM_CANCELLATION {
                 let (len, _stream_id) = self.encoder.stream_cancellation(wire, idx)?;

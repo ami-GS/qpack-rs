@@ -76,8 +76,11 @@ impl Encoder {
     }
 
     // Decode Decoder instructions
-    pub fn section_ackowledgment(&self, wire: &Vec<u8>, idx: usize) -> Result<(usize, u16), Box<dyn error::Error>> {
+    pub fn section_ackowledgment(&mut self, wire: &Vec<u8>, idx: usize, table: &mut Table) -> Result<(usize, u16), Box<dyn error::Error>> {
         let (len, stream_id) = Qnum::decode(wire, idx, 7);
+
+        let section = self.ack_section(stream_id as u16);
+        table.ack_section(section);
         Ok((len, stream_id as u16))
     }
     pub fn stream_cancellation(&self, wire: &Vec<u8>, idx: usize) -> Result<(usize, u16), Box<dyn error::Error>> {
