@@ -176,7 +176,7 @@ impl Decoder {
         let header = table.get_from_dynamic(base, table_idx as usize, true)?;
         let (len2, value_length) = Qnum::decode(wire, idx + len1, 7);
         let value = std::str::from_utf8(
-            &wire[(idx + len1)..(idx + len1 + value_length as usize)],
+            &wire[(idx + len1 + len2)..(idx + len1 + len2 + value_length as usize)],
         )?;
         Ok((len1 + len2 + value_length as usize, Header::from_string(header.0, value.to_string())))
     }
