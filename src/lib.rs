@@ -62,7 +62,7 @@ impl Qpack {
         let required_insert_count = self.table.get_insert_count();
         // TODO: suspicious
         let base = if relative_indexing {
-            (*self.table.dynamic_read).borrow().acked_section as u32
+            0
         } else {
             (*self.table.dynamic_read).borrow().insert_count as u32
         };
@@ -80,7 +80,7 @@ impl Qpack {
             } else if idx != (1 << 32) - 1 {
                 if relative_indexing {
                     self.encoder.literal_post_base_name_reference(encoded, idx as u32, &header.1);
-                } {
+                } else {
                     self.encoder.literal_name_reference(encoded, idx as u32, &header.1, on_static);
                 }
             } else { // not found
