@@ -31,14 +31,28 @@ impl DynamicTable {
     pub fn ack_section(&mut self, section: usize) {
         self.acked_section = section;
     }
-    fn evict_upto(&mut self, upto: usize) {
-        while upto < self.current_size {
-            if let Some(elm) = self.list.pop_back() {
-                self.current_size -= elm.header.0.len() + elm.header.1.len() + 32;
-            } else {
-                // error
+    fn evict_upto(&mut self, upto: usize) -> Result<(), Box<dyn error::Error>> {
+        let mut current_size = self.current_size;
+        let mut idx = 0;
+        for elm in self.list.iter() {
+            if self.acked_section < idx {
+                // trying to evict non-evictable entry
+                return Err(EncoderStreamError.into());
             }
+            if current_size <= upto {
+                break;
+            }
+            current_size -= elm.header.0.len() + elm.header.1.len() + 32;
+            idx += 1;
         }
+
+        while idx > 0 {
+            self.list.pop_back();
+            idx -= 1;
+        }
+        self.current_size = current_size;
+
+        Ok(())
     }
     pub fn dump_entries(&self) {
         // TODO: selective output target to do test table contents
@@ -80,7 +94,7 @@ impl DynamicTable {
         }
         // copy before eviction to avoid referenced entry to be deleted;
         // let dyn_header = (header.0.to_string(), header.1.to_string());
-        self.evict_upto(self.capacity - size);
+        self.evict_upto(self.capacity - size)?;
         self.list.push_front(Entry{header: header, _index: self.insert_count});
         self.insert_count += 1;
         self.current_size += size;
@@ -101,7 +115,7 @@ impl DynamicTable {
         if self.max_capacity < cap {
             return Err(EncoderStreamError.into());
         }
-        self.evict_upto(cap);
+        self.evict_upto(cap)?;
         self.capacity = cap;
         // error when to set 0. see $3.2.3
         // error when exceed limit as QPACK_ENCODER_STREAM_ERROR?
