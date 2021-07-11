@@ -146,7 +146,6 @@ impl Qpack {
                 len
             } else if wire[idx] & decoder::Instruction::STREAM_CANCELLATION == decoder::Instruction::STREAM_CANCELLATION {
                 let (len, _stream_id) = self.encoder.stream_cancellation(wire, idx)?;
-                // TODO: manage stream_id
                 len
             } else { // wire[idx] & Instruction::INSERT_COUNT_INCREMENT == Instruction::INSERT_COUNT_INCREMENT
                 let (len, increment) = self.encoder.insert_count_increment(wire, idx)?;

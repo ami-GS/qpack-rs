@@ -29,13 +29,15 @@ impl Encoder {
             pending_sections: HashMap::new(),
         }
     }
-    pub fn ack_section(&mut self, stream_id: u16) -> usize {
+    fn ack_section(&mut self, stream_id: u16) -> usize {
         // TOOD: remove unwrap
         let section = self.pending_sections.get(&stream_id).unwrap().clone();
         self.pending_sections.remove(&stream_id);
         section
     }
-
+    fn cancel_section(&mut self, stream_id: u16) {
+        self.pending_sections.remove(&stream_id);
+    }
     // Encode Encoder instructions
     pub fn set_dynamic_table_capacity(&self, encoded: &mut Vec<u8>, cap: u32, table: &mut Table) -> Result<(), Box<dyn error::Error>> {
         let len = Qnum::encode(encoded, cap, 5);
@@ -83,8 +85,10 @@ impl Encoder {
         table.ack_section(section);
         Ok((len, stream_id as u16))
     }
-    pub fn stream_cancellation(&self, wire: &Vec<u8>, idx: usize) -> Result<(usize, u16), Box<dyn error::Error>> {
+    pub fn stream_cancellation(&mut self, wire: &Vec<u8>, idx: usize) -> Result<(usize, u16), Box<dyn error::Error>> {
         let (len, stream_id) = Qnum::decode(wire, idx, 6);
+
+        self.cancel_section(stream_id as u16);
         Ok((len, stream_id as u16))
     }
     pub fn insert_count_increment(&self, wire: &Vec<u8>, idx: usize) -> Result<(usize, usize), Box<dyn error::Error>> {
