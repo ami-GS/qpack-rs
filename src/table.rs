@@ -3,7 +3,7 @@ use std::error;
 use std::rc::Rc;
 
 use crate::dynamic_table::DynamicTable;
-use crate::{Header, StrHeader};
+use crate::{DecompressionFailed, Header, StrHeader};
 
 pub struct Table {
     pub dynamic_table: Rc<RefCell<DynamicTable>>,
@@ -55,6 +55,9 @@ impl Table {
     }
 
     pub fn get_from_static(&self, idx: usize) -> Result<Header, Box<dyn error::Error>> {
+        if STATIC_TABLE_SIZE <= idx {
+            return Err(DecompressionFailed.into());
+        }
         let header = self.static_table[idx];
         Ok(Header::from_str_header(header))
     }
@@ -99,7 +102,8 @@ impl Table {
     }
 }
 
-const STATIC_TABLE: [StrHeader; 99] = [
+const STATIC_TABLE_SIZE: usize = 99;
+const STATIC_TABLE: [StrHeader; STATIC_TABLE_SIZE] = [
     (":authority", ""),
     (":path", "/"),
     ("age", "0"),
