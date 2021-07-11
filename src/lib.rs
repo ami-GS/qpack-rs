@@ -90,7 +90,7 @@ impl Qpack {
         self.encoder.pending_sections.insert(stream_id, required_insert_count);
         Ok(())
     }
-    pub fn decode_headers(&mut self, wire: &Vec<u8>, stream_id: u16) -> Result<Vec<Header>, Box<dyn error::Error>> {
+    pub fn decode_headers(&mut self, wire: &Vec<u8>, stream_id: u16) -> Result<(Vec<Header>, bool), Box<dyn error::Error>> {
         let mut idx = 0;
         let (len, requred_insert_count, base) = self.decoder.prefix(wire, idx, &self.table)?;
         idx += len;
@@ -100,25 +100,26 @@ impl Qpack {
 
         let mut headers = vec![];
         let wire_len = wire.len();
+        let mut ref_dynamic = false;
         while idx < wire_len {
             let ret = if wire[idx] & FieldType::INDEXED == FieldType::INDEXED {
-                self.decoder.indexed(wire, idx, base, &self.table)?
+                self.decoder.indexed(wire, &mut idx, base, &self.table)?
             } else if wire[idx] & FieldType::LITERAL_NAME_REFERENCE == FieldType::LITERAL_NAME_REFERENCE {
-                self.decoder.literal_name_reference(wire, idx, base, &self.table)?
+                self.decoder.literal_name_reference(wire, &mut idx, base, &self.table)?
             } else if wire[idx] & FieldType::LITERAL_LITERAL_NAME == FieldType::LITERAL_LITERAL_NAME {
-                self.decoder.literal_literal_name(wire, idx)?
+                self.decoder.literal_literal_name(wire, &mut idx)?
             } else if wire[idx] & FieldType::INDEXED_POST_BASE_INDEX == FieldType::INDEXED_POST_BASE_INDEX {
-                self.decoder.indexed_post_base_index(wire, idx, base, &self.table)?
+                self.decoder.indexed_post_base_index(wire, &mut idx, base, &self.table)?
             } else if wire[idx] & 0b11110000 == FieldType::LITERAL_POST_BASE_NAME_REFERENCE {
-                self.decoder.literal_post_base_name_reference(wire, idx, base, &self.table)?
+                self.decoder.literal_post_base_name_reference(wire, &mut idx, base, &self.table)?
             } else {
                 return Err(DecompressionFailed.into());
             };
-            idx += ret.0;
-            headers.push(ret.1);
+            headers.push(ret.0);
+            ref_dynamic |= ret.1;
         }
         self.decoder.pending_sections.insert(stream_id, requred_insert_count as usize);
-        Ok(headers)
+        Ok((headers, ref_dynamic))
     }
     pub fn decode_encoder_instruction(&mut self, wire: &Vec<u8>) -> Result<(), Box<dyn error::Error>> {
         let mut idx = 0;
@@ -295,7 +296,7 @@ mod tests {
     static STREAM_ID: u16 = 4;
 	#[test]
 	fn rfc_appendix_b1_encode() {
-		let mut qpack = Qpack::new(1024);
+		let mut qpack = Qpack::new(1, 1024);
 		let headers = vec![Header::from(":path", "/index.html")];
         let mut encoded = vec![];
 		let _ = qpack.encode_headers(&mut encoded, false, headers, STREAM_ID);
@@ -306,17 +307,18 @@ mod tests {
 	}
 	#[test]
 	fn rfc_appendix_b1_decode() {
-		let mut qpack = Qpack::new(1024);
+		let mut qpack = Qpack::new(1, 1024);
 		let wire = vec![0x00, 0x00, 0x51, 0x0b, 0x2f,
 								0x69, 0x6e, 0x64, 0x65, 0x78,
 								0x2e, 0x68, 0x74, 0x6d, 0x6c];
 		let out = qpack.decode_headers(&wire, STREAM_ID).unwrap();
-		assert_eq!(out, vec![Header::from(":path", "/index.html")]);
+		assert_eq!(out.0, vec![Header::from(":path", "/index.html")]);
+		assert_eq!(out.1, false);
 	}
 
 	#[test]
 	fn encode_indexed_simple() {
-		let mut qpack = Qpack::new(1024);
+		let mut qpack = Qpack::new(1, 1024);
 		let headers = vec![Header::from(":path", "/")];
         let mut encoded = vec![];
 		let _ = qpack.encode_headers(&mut encoded, false, headers, STREAM_ID);
@@ -325,23 +327,24 @@ mod tests {
 	}
 	#[test]
 	fn decode_indexed_simple() {
-		let mut qpack = Qpack::new(1024);
+		let mut qpack = Qpack::new(1, 1024);
 		let wire = vec![0x00, 0x00, 0xc1];
 		let out = qpack.decode_headers(&wire, STREAM_ID).unwrap();
-		assert_eq!(out,
+		assert_eq!(out.0,
 			vec![Header::from(":path", "/")]);
+        assert_eq!(out.1, false);
 	}
     #[test]
     fn encode_set_dynamic_table_capacity() {
-        let mut qpack = Qpack::new(1024);
+        let mut qpack = Qpack::new(1, 1024);
         let mut encoded = vec![];
         let _ = qpack.encode_set_dynamic_table_capacity(&mut encoded, 220);
         assert_eq!(encoded, vec![0x3f, 0xbd, 0x01]);
     }
     #[test]
     fn encode_insert_with_name_reference() {
-		let mut qpack_encoder = Qpack::new(1024);
-        let mut qpack_decoder = Qpack::new(1024);
+		let mut qpack_encoder = Qpack::new(1, 1024);
+        let mut qpack_decoder = Qpack::new(1, 1024);
 
         println!("Step 1");
         {   // encoder instruction
@@ -371,8 +374,9 @@ mod tests {
             let _ = qpack_encoder.encode_headers(&mut encoded, true, headers.clone(), STREAM_ID);
             assert_eq!(encoded, vec![0x03, 0x81, 0x10, 0x11]);
 
-            if let Ok(decoded_headers) = qpack_decoder.decode_headers(&encoded, STREAM_ID) {
-                assert_eq!(headers, decoded_headers);
+            if let Ok(decoded) = qpack_decoder.decode_headers(&encoded, STREAM_ID) {
+                assert_eq!(decoded.0, headers);
+                assert_eq!(decoded.1, true);
             } else {
                 assert!(false);
             }
@@ -442,8 +446,9 @@ mod tests {
                         headers.clone(), 8);
             assert_eq!(encoded, vec![0x05, 0x00, 0x80, 0xc1, 0x81]);
 
-            if let Ok(decoded_headers) = qpack_decoder.decode_headers(&encoded, 8) {
-                assert_eq!(headers, decoded_headers);
+            if let Ok(decoded) = qpack_decoder.decode_headers(&encoded, 8) {
+                assert_eq!(decoded.0, headers);
+                assert_eq!(decoded.1, true);
             } else {
                 assert!(false);
             }

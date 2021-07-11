@@ -129,60 +129,73 @@ impl Decoder {
         Ok((len1 + len2, required_insert_count, base as usize))
     }
 
-    pub fn indexed(&self, wire: &Vec<u8>, idx: usize, base: usize, table: &Table) -> Result<(usize, Header), Box<dyn error::Error>> {
-        let (len, table_idx) = Qnum::decode(wire, idx, 6);
+    pub fn indexed(&self, wire: &Vec<u8>, idx: &mut usize, base: usize, table: &Table) -> Result<(Header, bool), Box<dyn error::Error>> {
+        let from_static = wire[*idx] & 0b01000000 == 0b01000000;
+        let (len, table_idx) = Qnum::decode(wire, *idx, 6);
+        *idx += len;
 
         Ok(
-            if wire[idx] & 0b01000000 == 0b01000000 {
-                (len, table.get_from_static(table_idx as usize)?)
+            if from_static {
+                (table.get_from_static(table_idx as usize)?, false)
             } else {
-                (len, table.get_from_dynamic(base, table_idx as usize, false)?)
+                (table.get_from_dynamic(base, table_idx as usize, false)?, true)
             }
         )
     }
 
-    pub fn literal_name_reference(&self, wire: &Vec<u8>, idx: usize, base: usize, table: &Table) -> Result<(usize, Header), Box<dyn error::Error>> {
-        let (len1, table_idx) = Qnum::decode(wire, idx, 4);
+    pub fn literal_name_reference(&self, wire: &Vec<u8>, idx: &mut usize, base: usize, table: &Table) -> Result<(Header, bool), Box<dyn error::Error>> {
+        let (len, table_idx) = Qnum::decode(wire, *idx, 4);
+        let from_static = wire[*idx] & 0b00010000 == 0b00010000;
+        *idx += len;
 
-        let header = if wire[idx] & 0b00010000 == 0b00010000 {
+        let header = if from_static {
             table.get_from_static(table_idx as usize)?
         } else {
             table.get_from_dynamic(base, table_idx as usize, false)?
         };
-        let (len2, value_length) = Qnum::decode(wire, idx + len1, 7);
-        wire[idx + len1 + len2];
+        let (len, value_length) = Qnum::decode(wire, *idx, 7);
+        *idx += len;
         let value = std::str::from_utf8(
-            &wire[(idx + len1 + len2)..(idx + len1 + len2 + value_length as usize)],
+            &wire[*idx..*idx + value_length as usize],
         )?;
+        *idx += value_length  as usize;
 
-        Ok((len1 + len2 + value_length as usize, Header::from_string(header.0, value.to_string())))
+        Ok((Header::from_string(header.0, value.to_string()), !from_static))
     }
 
-    pub fn literal_literal_name(&self, wire: &Vec<u8>, idx: usize) -> Result<(usize, Header), Box<dyn error::Error>> {
-        let (len1, name_length) = Qnum::decode(wire, idx, 3);
+    pub fn literal_literal_name(&self, wire: &Vec<u8>, idx: &mut usize) -> Result<(Header, bool), Box<dyn error::Error>> {
+        let (len, name_length) = Qnum::decode(wire, *idx, 3);
+        *idx += len;
         let name = std::str::from_utf8(
-            &wire[(idx + len1)..(idx + len1 + name_length as usize)],
+            &wire[*idx..*idx + name_length as usize],
         )?;
-        let (len2, value_length) = Qnum::decode(wire, idx + len1 + name_length as usize, 7);
+        *idx += name_length as usize;
+        let (len, value_length) = Qnum::decode(wire, *idx, 7);
+        *idx += len;
         let value = std::str::from_utf8(
-            &wire[(idx + len1 + len2 + name_length as usize)..(idx + len1 + len2 + name_length as usize + value_length as usize)],
+            &wire[*idx..*idx + value_length as usize],
         )?;
-        Ok((len1 + len2 + name_length as usize + value_length as usize, Header::from(name, value)))
+        *idx += value_length as usize;
+        Ok((Header::from(name, value), false))
     }
 
-    pub fn indexed_post_base_index(&self, wire: &Vec<u8>, idx: usize, base: usize, table: &Table) -> Result<(usize, Header), Box<dyn error::Error>> {
-        let (len1, table_idx) = Qnum::decode(wire, idx, 4);
+    pub fn indexed_post_base_index(&self, wire: &Vec<u8>, idx: &mut usize, base: usize, table: &Table) -> Result<(Header, bool), Box<dyn error::Error>> {
+        let (len, table_idx) = Qnum::decode(wire, *idx, 4);
+        *idx += len;
         let header = table.get_from_dynamic(base, table_idx as usize, true)?;
-        Ok((len1, header))
+        Ok((header, true))
     }
 
-    pub fn literal_post_base_name_reference(&self, wire: &Vec<u8>, idx: usize, base: usize, table: &Table) -> Result<(usize, Header), Box<dyn error::Error>> {
-        let (len1, table_idx) = Qnum::decode(wire, idx, 3);
+    pub fn literal_post_base_name_reference(&self, wire: &Vec<u8>, idx: &mut usize, base: usize, table: &Table) -> Result<(Header, bool), Box<dyn error::Error>> {
+        let (len, table_idx) = Qnum::decode(wire, *idx, 3);
+        *idx += len;
         let header = table.get_from_dynamic(base, table_idx as usize, true)?;
-        let (len2, value_length) = Qnum::decode(wire, idx + len1, 7);
+        let (len, value_length) = Qnum::decode(wire, *idx, 7);
+        *idx += len;
         let value = std::str::from_utf8(
-            &wire[(idx + len1 + len2)..(idx + len1 + len2 + value_length as usize)],
+            &wire[*idx..*idx + value_length as usize],
         )?;
-        Ok((len1 + len2 + value_length as usize, Header::from_string(header.0, value.to_string())))
+        *idx += value_length as usize;
+        Ok((Header::from_string(header.0, value.to_string()), true))
     }
 }
