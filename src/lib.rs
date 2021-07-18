@@ -23,48 +23,69 @@ impl Qpack {
             table: Table::new(dynamic_table_max_capacity),
         }
     }
-    pub fn encode_insert_headers(&mut self, encoded: &mut Vec<u8>, headers: Vec<Header>) -> Result<(), Box<dyn error::Error>> {
+    pub fn encode_insert_headers(&self, encoded: &mut Vec<u8>, headers: Vec<Header>) -> Result<(), Box<dyn error::Error>> {
         for header in headers {
             let (both_match, on_static, idx) = self.table.find_index(&header);
             let idx = if idx != (1 << 32) - 1 && !on_static {
                 // absolute to relative conversion
-                (*self.table.dynamic_read).borrow().insert_count - 1 - idx
+                self.table.dynamic_table.insert_count - 1 - idx
             } else { idx };
 
             if both_match && !on_static {
-                self.encoder.duplicate(encoded, idx, &mut self.table)?;
+                self.encoder.duplicate(encoded, idx)?;
             } else if idx != (1 << 32) - 1 {
-                self.encoder.insert_with_name_reference(encoded, on_static, idx, header.1, &mut self.table)?;
+                self.encoder.insert_with_name_reference(encoded, on_static, idx, header.1)?;
             } else {
-                self.encoder.insert_with_literal_name(encoded, header.0, header.1, &mut self.table)?;
+                self.encoder.insert_with_literal_name(encoded, header.0, header.1)?;
             }
-            self.encoder.known_sending_count += 1;
         }
         Ok(())
     }
-    pub fn encode_set_dynamic_table_capacity(&mut self, encoded: &mut Vec<u8>, capacity: u32) -> Result<(), Box<dyn error::Error>> {
-        self.encoder.set_dynamic_table_capacity(encoded, capacity, &mut self.table)
+    // TODO: can be optimized
+    pub fn insert_headers(&mut self, headers: Vec<Header>) -> Result<(), Box<dyn error::Error>> {
+        let count =  headers.len();
+        for header in headers {
+            self.table.insert(header)?;
+        }
+        self.encoder.known_sending_count += count;
+        Ok(())
     }
-    pub fn encode_section_ackowledgment(&mut self, encoded: &mut Vec<u8>, stream_id: u16) -> Result<(), Box<dyn error::Error>> {
-        self.decoder.section_ackowledgment(encoded, &mut self.table, stream_id)
+    pub fn encode_set_dynamic_table_capacity(&self, encoded: &mut Vec<u8>, capacity: usize) -> Result<(), Box<dyn error::Error>> {
+        self.encoder.set_dynamic_table_capacity(encoded, capacity)
     }
-    pub fn encode_stream_cancellation(&mut self, encoded: &mut Vec<u8>, stream_id: u16) -> Result<(), Box<dyn error::Error>> {
+    pub fn commit_set_dynamic_table_capacity(&mut self, capacity: usize) -> Result<(), Box<dyn error::Error>> {
+        self.table.set_dynamic_table_capacity(capacity)
+    }
+    pub fn encode_section_ackowledgment(&self, encoded: &mut Vec<u8>, stream_id: u16) -> Result<(), Box<dyn error::Error>> {
+        self.decoder.section_ackowledgment(encoded, stream_id)
+    }
+    pub fn commit_section_ackowledgment(&mut self, stream_id: u16) -> Result<(), Box<dyn error::Error>> {
+        let section = self.decoder.ack_section(stream_id);
+        self.table.dynamic_table.ack_section(section);
+        Ok(())
+    }
+    pub fn encode_stream_cancellation(&self, encoded: &mut Vec<u8>, stream_id: u16) -> Result<(), Box<dyn error::Error>> {
         self.decoder.stream_cancellation(encoded, stream_id)
     }
-    pub fn encode_insert_count_increment(&self, encoded: &mut Vec<u8>) -> Result<(), Box<dyn error::Error>> {
-        let increment = (*self.table.dynamic_read).borrow().list.len() - (*self.table.dynamic_read).borrow().acked_section;
+    pub fn commit_stream_cancellation(&mut self, stream_id: u16) -> Result<(), Box<dyn error::Error>> {
+        self.decoder.cancel_section(stream_id);
+        Ok(())
+    }
+    // TODO: check whether to update state
+    pub fn encode_insert_count_increment(&mut self, encoded: &mut Vec<u8>) -> Result<(), Box<dyn error::Error>> {
+        let increment = self.table.dynamic_table.list.len() - self.table.dynamic_table.acked_section;
         let out = self.decoder.insert_count_increment(encoded, increment)?;
-        (*self.table.dynamic_table).borrow_mut().acked_section += increment;
+        self.table.dynamic_table.acked_section += increment;
         Ok(out)
     }
-    pub fn encode_headers(&mut self, encoded: &mut Vec<u8>, relative_indexing: bool, headers: Vec<Header>, stream_id: u16) -> Result<(), Box<dyn error::Error>> {
+    pub fn encode_headers(&self, encoded: &mut Vec<u8>, relative_indexing: bool, headers: Vec<Header>) -> Result<usize, Box<dyn error::Error>> {
         // TODO: decide whether to use s_flag (relative indexing)
         let required_insert_count = self.table.get_insert_count();
         // TODO: suspicious
         let base = if relative_indexing {
             0
         } else {
-            (*self.table.dynamic_read).borrow().insert_count as u32
+            self.table.dynamic_table.insert_count as u32
         };
         self.encoder.prefix(encoded, &self.table, required_insert_count as u32, relative_indexing, base);
 
@@ -87,9 +108,13 @@ impl Qpack {
                 self.encoder.literal_literal_name(encoded, &header);
             }
         }
+        Ok(required_insert_count)
+    }
+    pub fn commit_sent_headers(&mut self, stream_id: u16, required_insert_count: usize) -> Result<(), Box<dyn error::Error>> {
         self.encoder.pending_sections.insert(stream_id, required_insert_count);
         Ok(())
     }
+
     pub fn decode_headers(&mut self, wire: &Vec<u8>, stream_id: u16) -> Result<(Vec<Header>, bool), Box<dyn error::Error>> {
         let mut idx = 0;
         let (len, requred_insert_count, base) = self.decoder.prefix(wire, idx, &self.table)?;
@@ -149,10 +174,10 @@ impl Qpack {
                 len
             } else { // wire[idx] & Instruction::INSERT_COUNT_INCREMENT == Instruction::INSERT_COUNT_INCREMENT
                 let (len, increment) = self.encoder.insert_count_increment(wire, idx)?;
-                if increment == 0 || self.encoder.known_sending_count < (*self.table.dynamic_read).borrow().acked_section + increment {
+                if increment == 0 || self.encoder.known_sending_count < self.table.dynamic_table.acked_section + increment {
                     return Err(DecoderStreamError.into());
                 }
-                (*self.table.dynamic_table).borrow_mut().acked_section += increment;
+                self.table.dynamic_table.acked_section += increment;
                 len
             };
         }
@@ -291,14 +316,15 @@ impl Header {
 
 #[cfg(test)]
 mod tests {
-	use crate::{Header, Qpack};
+    use std::{error, sync::{Arc, RwLock}, thread};
+    use crate::{Header, Qpack};
     static STREAM_ID: u16 = 4;
 	#[test]
 	fn rfc_appendix_b1_encode() {
-		let mut qpack = Qpack::new(1024);
+		let qpack = Qpack::new(1024);
 		let headers = vec![Header::from(":path", "/index.html")];
         let mut encoded = vec![];
-		let _ = qpack.encode_headers(&mut encoded, false, headers, STREAM_ID);
+		qpack.encode_headers(&mut encoded, false, headers).unwrap();
 		assert_eq!(encoded,
 					vec![0x00, 0x00, 0x51, 0x0b, 0x2f,
 						 0x69, 0x6e, 0x64, 0x65, 0x78,
@@ -317,10 +343,10 @@ mod tests {
 
 	#[test]
 	fn encode_indexed_simple() {
-		let mut qpack = Qpack::new(1024);
+		let qpack = Qpack::new(1024);
 		let headers = vec![Header::from(":path", "/")];
         let mut encoded = vec![];
-		let _ = qpack.encode_headers(&mut encoded, false, headers, STREAM_ID);
+		let _ = qpack.encode_headers(&mut encoded, false, headers);
 		assert_eq!(encoded,
 			vec![0x00, 0x00, 0xc1]);
 	}
@@ -335,29 +361,73 @@ mod tests {
 	}
     #[test]
     fn encode_set_dynamic_table_capacity() {
-        let mut qpack = Qpack::new(1024);
+        let qpack = Qpack::new(1024);
         let mut encoded = vec![];
         let _ = qpack.encode_set_dynamic_table_capacity(&mut encoded, 220);
         assert_eq!(encoded, vec![0x3f, 0xbd, 0x01]);
     }
     #[test]
+    fn multi_threading() {
+        let qpack_encoder = Qpack::new(1024);
+        let qpack_decoder = Qpack::new(1024);
+        let safe_encoder = Arc::new(RwLock::new(qpack_encoder));
+        let safe_decoder = Arc::new(RwLock::new(qpack_decoder));
+
+        let f = |headers: Vec<Header>, stream_id: u16, expected_wire: Vec<u8>,
+                                                encoder: Arc<RwLock<Qpack>>, decoder: Arc<RwLock<Qpack>>| -> Result<(), Box<dyn error::Error>> {
+            let mut encoded = vec![];
+            let required_insert_count = encoder.read().unwrap().encode_headers(&mut encoded, false, headers.clone())?;
+            let _ = encoder.write().unwrap().commit_sent_headers(stream_id, required_insert_count);
+            //assert_eq!(encoded, expected_wire);
+
+            if let Ok(out) = decoder.write().unwrap().decode_headers(&encoded, stream_id) {
+                assert_eq!(out.0, headers);
+                assert_eq!(out.1, false);
+            } else {
+                assert!(false);
+            }
+            Ok(())
+        };
+
+        let mut ths = vec![];
+        let headers_set = vec![vec![Header::from(":path", "/"), Header::from("age", "0")],
+                                            vec![Header::from("content-length", "0"), Header::from(":method", "CONNECT")]];
+        let expected_wires: Vec<Vec<u8>> = vec![vec![], vec![]];
+        for i in 0..headers_set.len() {
+            let en = Arc::clone(&safe_encoder);
+            let de = Arc::clone(&safe_decoder);
+            let headers = headers_set[i].clone();
+            let expected_wire = expected_wires[i].clone();
+            ths.push(thread::spawn(move || {
+                let _ = f(headers, 4 + (i as u16) * 2,
+                        expected_wire, en , de);
+            }));
+        }
+        for th in ths {
+            let _ = th.join();
+        }
+    }
+    #[test]
     fn encode_insert_with_name_reference() {
-		let mut qpack_encoder = Qpack::new(1024);
+        let mut qpack_encoder = Qpack::new(1024);
         let mut qpack_decoder = Qpack::new(1024);
 
         println!("Step 1");
         {   // encoder instruction
             let mut encoded = vec![];
-            let _ = qpack_encoder.encode_set_dynamic_table_capacity(&mut encoded, 220);
+            let capacity = 220;
+            let _ = qpack_encoder.encode_set_dynamic_table_capacity(&mut encoded, capacity);
+            let _ = qpack_encoder.commit_set_dynamic_table_capacity(capacity);
             let headers = vec![Header::from(":authority", "www.example.com"),
                                           Header::from(":path", "/sample/path")];
 
-            let _ = qpack_encoder.encode_insert_headers(&mut encoded, headers);
+            let _ = qpack_encoder.encode_insert_headers(&mut encoded, headers.clone());
             assert_eq!(encoded, vec![0x3f, 0xbd, 0x01, 0xc0, 0x0f, 0x77, 0x77,
                                     0x77, 0x2e, 0x65, 0x78, 0x61, 0x6d, 0x70,
                                     0x6c, 0x65, 0x2e, 0x63, 0x6f, 0x6d, 0xc1,
                                     0x0c, 0x2f, 0x73, 0x61, 0x6d, 0x70, 0x6c,
                                     0x65, 0x2f, 0x70, 0x61, 0x74, 0x68]);
+            let _ = qpack_encoder.insert_headers(headers);
 
             let _ = qpack_decoder.decode_encoder_instruction(&encoded);
 
@@ -370,7 +440,8 @@ mod tests {
             let mut encoded = vec![];
             let headers = vec![Header::from(":authority", "www.example.com"),
                                           Header::from(":path", "/sample/path")];
-            let _ = qpack_encoder.encode_headers(&mut encoded, true, headers.clone(), STREAM_ID);
+            let required_insert_count = qpack_encoder.encode_headers(&mut encoded, true, headers.clone()).unwrap();
+            qpack_encoder.commit_sent_headers(STREAM_ID, required_insert_count);
             assert_eq!(encoded, vec![0x03, 0x81, 0x10, 0x11]);
 
             if let Ok(decoded) = qpack_decoder.decode_headers(&encoded, STREAM_ID) {
@@ -386,6 +457,7 @@ mod tests {
             let mut encoded = vec![];
             let _ = qpack_decoder.encode_section_ackowledgment(&mut encoded, STREAM_ID);
             assert_eq!(encoded, vec![0x84]);
+            let _= qpack_decoder.commit_section_ackowledgment(STREAM_ID);
 
             let _ = qpack_encoder.decode_decoder_instruction(&encoded);
             println!("dump encoder side dynamic table");
@@ -398,10 +470,11 @@ mod tests {
         {   // encoder instruction
             let mut encoded = vec![];
             let headers = vec![Header::from("custom-key", "custom-value")];
-            let _ = qpack_encoder.encode_insert_headers(&mut encoded, headers);
+            let _ = qpack_encoder.encode_insert_headers(&mut encoded, headers.clone());
             assert_eq!(encoded, vec![0x4a, 0x63, 0x75, 0x73, 0x74, 0x6f, 0x6d, 0x2d, 0x6b, 0x65,
                                     0x79, 0x0c, 0x63, 0x75, 0x73, 0x74, 0x6f, 0x6d, 0x2d, 0x76,
                                     0x61, 0x6c, 0x75, 0x65]);
+            let _ = qpack_encoder.insert_headers(headers);
 
             let _ = qpack_decoder.decode_encoder_instruction(&encoded);
             println!("dump encoder side dynamic table");
@@ -426,8 +499,9 @@ mod tests {
         {   // encoder instruction
             let mut encoded = vec![];
             let headers = vec![Header::from(":authority", "www.example.com")];
-            let _ = qpack_encoder.encode_insert_headers(&mut encoded, headers);
+            let _ = qpack_encoder.encode_insert_headers(&mut encoded, headers.clone());
             assert_eq!(encoded, vec![0x02]);
+            let _ = qpack_encoder.insert_headers(headers);
 
             let _= qpack_decoder.decode_encoder_instruction(&encoded);
 
@@ -441,8 +515,9 @@ mod tests {
             let headers = vec![Header::from(":authority", "www.example.com"),
                                         Header::from(":path", "/"),
                                         Header::from("custom-key", "custom-value")];
-            let _ = qpack_encoder.encode_headers(&mut encoded, false,
-                        headers.clone(), 8);
+            let required_insert_count = qpack_encoder.encode_headers(&mut encoded, false,
+                        headers.clone()).unwrap();
+            let _ = qpack_encoder.commit_sent_headers(8, required_insert_count);
             assert_eq!(encoded, vec![0x05, 0x00, 0x80, 0xc1, 0x81]);
 
             if let Ok(decoded) = qpack_decoder.decode_headers(&encoded, 8) {
@@ -458,6 +533,7 @@ mod tests {
             let mut encoded = vec![];
             let _ = qpack_decoder.encode_stream_cancellation(&mut encoded, 8);
             assert_eq!(encoded, vec![0x48]);
+            let _= qpack_decoder.commit_stream_cancellation(8);
 
             let _ = qpack_encoder.decode_decoder_instruction(&encoded);
         }
@@ -466,9 +542,10 @@ mod tests {
         {   // encoder instruction
             let mut encoded = vec![];
             let headers = vec![Header::from("custom-key", "custom-value2")];
-            let _ = qpack_encoder.encode_insert_headers(&mut encoded, headers);
+            let _ = qpack_encoder.encode_insert_headers(&mut encoded, headers.clone());
             assert_eq!(encoded, vec![0x81, 0x0d, 0x63, 0x75, 0x73, 0x74, 0x6f, 0x6d,
                                      0x2d, 0x76, 0x61, 0x6c, 0x75, 0x65, 0x32]);
+            let _ = qpack_encoder.insert_headers(headers);
 
             let _ = qpack_decoder.decode_encoder_instruction(&encoded);
 

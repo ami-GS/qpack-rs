@@ -39,14 +39,13 @@ impl Encoder {
         self.pending_sections.remove(&stream_id);
     }
     // Encode Encoder instructions
-    pub fn set_dynamic_table_capacity(&self, encoded: &mut Vec<u8>, cap: u32, table: &mut Table) -> Result<(), Box<dyn error::Error>> {
-        let len = Qnum::encode(encoded, cap, 5);
+    pub fn set_dynamic_table_capacity(&self, encoded: &mut Vec<u8>, cap: usize) -> Result<(), Box<dyn error::Error>> {
+        let len = Qnum::encode(encoded, cap as u32, 5);
         let wire_len = encoded.len();
         encoded[wire_len - len] |= Instruction::SET_DYNAMIC_TABLE_CAPACITY;
-
-        table.set_dynamic_table_capacity(cap as usize)
+        Ok(())
     }
-    pub fn insert_with_name_reference(&self, encoded: &mut Vec<u8>, on_static: bool, name_idx: usize, value: String, table: &mut Table) -> Result<(), Box<dyn error::Error>> {
+    pub fn insert_with_name_reference(&self, encoded: &mut Vec<u8>, on_static: bool, name_idx: usize, value: String) -> Result<(), Box<dyn error::Error>> {
         let len = Qnum::encode(encoded, name_idx as u32, 6);
         let wire_len = encoded.len();
         if on_static { // "T" bit
@@ -56,25 +55,22 @@ impl Encoder {
         // TODO: "H" bit
         let _ = Qnum::encode(encoded, value.len() as u32, 7);
         encoded.append(&mut value.as_bytes().to_vec());
-
-        table.insert_with_name_reference(name_idx, value.to_string(), on_static)
+        Ok(())
     }
-    pub fn insert_with_literal_name(&self, encoded: &mut Vec<u8>, name: String, value: String, table: &mut Table) -> Result<(), Box<dyn error::Error>> {
+    pub fn insert_with_literal_name(&self, encoded: &mut Vec<u8>, name: String, value: String) -> Result<(), Box<dyn error::Error>> {
         let len = Qnum::encode(encoded, name.len() as u32, 5);
         let wire_len = encoded.len();
         encoded[wire_len - len] |= Instruction::INSERT_WITH_LITERAL_NAME;
         encoded.append(&mut name.as_bytes().to_vec());
         let _ = Qnum::encode(encoded, value.len() as u32, 7);
         encoded.append(&mut value.as_bytes().to_vec());
-
-        table.insert_with_literal_name(name, value)
+        Ok(())
     }
-    pub fn duplicate(&self, encoded: &mut Vec<u8>, idx: usize, table: &mut Table) -> Result<(), Box<dyn error::Error>> {
+    pub fn duplicate(&self, encoded: &mut Vec<u8>, idx: usize) -> Result<(), Box<dyn error::Error>> {
         let len  = Qnum::encode(encoded, idx as u32, 5);
         let wire_len = encoded.len();
         encoded[wire_len - len] |= Instruction::DUPLICATE;
-
-        table.duplicate(idx)
+        Ok(())
     }
 
     // Decode Decoder instructions
@@ -87,7 +83,6 @@ impl Encoder {
     }
     pub fn stream_cancellation(&mut self, wire: &Vec<u8>, idx: usize) -> Result<(usize, u16), Box<dyn error::Error>> {
         let (len, stream_id) = Qnum::decode(wire, idx, 6);
-
         self.cancel_section(stream_id as u16);
         Ok((len, stream_id as u16))
     }

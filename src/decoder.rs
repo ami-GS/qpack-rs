@@ -61,33 +61,28 @@ impl Decoder {
         table.duplicate(index as usize)?;
         Ok(len)
     }
-    fn ack_section(&mut self, stream_id: u16) -> usize {
+    pub fn ack_section(&mut self, stream_id: u16) -> usize {
         // TOOD: remove unwrap
         let section = self.pending_sections.get(&stream_id).unwrap().clone();
         self.pending_sections.remove(&stream_id);
         section
     }
-    fn cancel_section(&mut self, stream_id: u16) {
+    pub fn cancel_section(&mut self, stream_id: u16) {
         self.pending_sections.remove(&stream_id);
     }
     // Encode Decoder instructions
-    pub fn section_ackowledgment(&mut self, encoded: &mut Vec<u8>, table: &mut Table, stream_id: u16) -> Result<(), Box<dyn error::Error>> {
+    pub fn section_ackowledgment(&self, encoded: &mut Vec<u8>, stream_id: u16) -> Result<(), Box<dyn error::Error>> {
         // TODO: double check streamID's max length
         let len = Qnum::encode(encoded, stream_id as u32, 7);
         let wire_len = encoded.len();
         encoded[wire_len - len] |= Instruction::SECTION_ACKNOWLEDGMENT;
-
-        let section = self.ack_section(stream_id);
-        (*table.dynamic_table).borrow_mut().ack_section(section);
         Ok(())
     }
-    pub fn stream_cancellation(&mut self, encoded: &mut Vec<u8>, stream_id: u16) -> Result<(), Box<dyn error::Error>> {
+    pub fn stream_cancellation(&self, encoded: &mut Vec<u8>, stream_id: u16) -> Result<(), Box<dyn error::Error>> {
         // TODO: double check streamID's max length
         let len = Qnum::encode(encoded, stream_id as u32, 6);
         let wire_len = encoded.len();
         encoded[wire_len - len] |= Instruction::STREAM_CANCELLATION;
-
-        self.cancel_section(stream_id);
         Ok(())
     }
     pub fn insert_count_increment(&self, encoded: &mut Vec<u8>, increment: usize) -> Result<(), Box<dyn error::Error>> {
