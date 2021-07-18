@@ -295,7 +295,7 @@ mod tests {
     static STREAM_ID: u16 = 4;
 	#[test]
 	fn rfc_appendix_b1_encode() {
-		let mut qpack = Qpack::new(1, 1024);
+		let mut qpack = Qpack::new(1024);
 		let headers = vec![Header::from(":path", "/index.html")];
         let mut encoded = vec![];
 		let _ = qpack.encode_headers(&mut encoded, false, headers, STREAM_ID);
@@ -306,7 +306,7 @@ mod tests {
 	}
 	#[test]
 	fn rfc_appendix_b1_decode() {
-		let mut qpack = Qpack::new(1, 1024);
+		let mut qpack = Qpack::new(1024);
 		let wire = vec![0x00, 0x00, 0x51, 0x0b, 0x2f,
 								0x69, 0x6e, 0x64, 0x65, 0x78,
 								0x2e, 0x68, 0x74, 0x6d, 0x6c];
@@ -317,7 +317,7 @@ mod tests {
 
 	#[test]
 	fn encode_indexed_simple() {
-		let mut qpack = Qpack::new(1, 1024);
+		let mut qpack = Qpack::new(1024);
 		let headers = vec![Header::from(":path", "/")];
         let mut encoded = vec![];
 		let _ = qpack.encode_headers(&mut encoded, false, headers, STREAM_ID);
@@ -326,7 +326,7 @@ mod tests {
 	}
 	#[test]
 	fn decode_indexed_simple() {
-		let mut qpack = Qpack::new(1, 1024);
+		let mut qpack = Qpack::new(1024);
 		let wire = vec![0x00, 0x00, 0xc1];
 		let out = qpack.decode_headers(&wire, STREAM_ID).unwrap();
 		assert_eq!(out.0,
@@ -335,15 +335,15 @@ mod tests {
 	}
     #[test]
     fn encode_set_dynamic_table_capacity() {
-        let mut qpack = Qpack::new(1, 1024);
+        let mut qpack = Qpack::new(1024);
         let mut encoded = vec![];
         let _ = qpack.encode_set_dynamic_table_capacity(&mut encoded, 220);
         assert_eq!(encoded, vec![0x3f, 0xbd, 0x01]);
     }
     #[test]
     fn encode_insert_with_name_reference() {
-		let mut qpack_encoder = Qpack::new(1, 1024);
-        let mut qpack_decoder = Qpack::new(1, 1024);
+		let mut qpack_encoder = Qpack::new(1024);
+        let mut qpack_decoder = Qpack::new(1024);
 
         println!("Step 1");
         {   // encoder instruction
