@@ -72,11 +72,14 @@ impl Qpack {
         Ok(())
     }
     // TODO: check whether to update state
-    pub fn encode_insert_count_increment(&mut self, encoded: &mut Vec<u8>) -> Result<(), Box<dyn error::Error>> {
+    pub fn encode_insert_count_increment(&self, encoded: &mut Vec<u8>) -> Result<usize, Box<dyn error::Error>> {
         let increment = self.table.dynamic_table.list.len() - self.table.dynamic_table.acked_section;
-        let out = self.decoder.insert_count_increment(encoded, increment)?;
+        self.decoder.insert_count_increment(encoded, increment)?;
+        Ok(increment)
+    }
+    pub fn commit_insert_count_increment(&mut self, increment: usize) -> Result<(), Box<dyn error::Error>> {
         self.table.dynamic_table.acked_section += increment;
-        Ok(out)
+        Ok(())
     }
     pub fn encode_headers(&self, encoded: &mut Vec<u8>, relative_indexing: bool, headers: Vec<Header>) -> Result<usize, Box<dyn error::Error>> {
         // TODO: decide whether to use s_flag (relative indexing)
@@ -441,7 +444,7 @@ mod tests {
             let headers = vec![Header::from(":authority", "www.example.com"),
                                           Header::from(":path", "/sample/path")];
             let required_insert_count = qpack_encoder.encode_headers(&mut encoded, true, headers.clone()).unwrap();
-            qpack_encoder.commit_sent_headers(STREAM_ID, required_insert_count);
+            let _ = qpack_encoder.commit_sent_headers(STREAM_ID, required_insert_count);
             assert_eq!(encoded, vec![0x03, 0x81, 0x10, 0x11]);
 
             if let Ok(decoded) = qpack_decoder.decode_headers(&encoded, STREAM_ID) {
@@ -486,8 +489,9 @@ mod tests {
         println!("Step 5");
         {   // decoder instruction
             let mut encoded = vec![];
-            let _ = qpack_decoder.encode_insert_count_increment(&mut encoded);
+            let increment = qpack_decoder.encode_insert_count_increment(&mut encoded).unwrap();
             assert_eq!(encoded, vec![0x01]);
+            let _ = qpack_decoder.commit_insert_count_increment(increment);
 
             let _ = qpack_encoder.decode_decoder_instruction(&encoded);
 
