@@ -12,7 +12,9 @@ pub struct DynamicTable {
     pub current_size: usize,
     pub insert_count: usize,
     pub capacity: usize,
-    pub acked_section: usize, // experimental
+    // # 2.1.4
+    // The Known Received Count is the total number of dynamic table insertions and duplications acknowledged by the decoder
+    pub known_received_count: usize,
     // set by SETTINGS_QPACK_MAX_TABLE_CAPACITY in SETTINGS frame
     pub max_capacity: usize,
 }
@@ -24,18 +26,18 @@ impl DynamicTable {
             current_size: 0,
             insert_count: 0,
             capacity: 0,
-            acked_section: 0,
-            max_capacity
+            known_received_count: 0,
+            max_capacity,
         }
     }
     pub fn ack_section(&mut self, section: usize) {
-        self.acked_section = section;
+        self.known_received_count = section;
     }
     fn evict_upto(&mut self, upto: usize) -> Result<(), Box<dyn error::Error>> {
         let mut current_size = self.current_size;
         let mut idx = 0;
         for elm in self.list.iter() {
-            if self.acked_section < idx {
+            if self.known_received_count < idx {
                 // trying to evict non-evictable entry
                 return Err(EncoderStreamError.into());
             }
@@ -59,7 +61,7 @@ impl DynamicTable {
         println!("Insert Count:{}, Current Size: {}", self.insert_count, self.current_size);
         let mut idx = self.insert_count-1;
         for entry in self.list.iter() {
-            if idx + 1 == self.acked_section {
+            if idx + 1 == self.known_received_count {
                 println!("v-------- acked sections --------v");
             }
             println!("\tAbs:{} ({}={})", idx, entry.header.0, entry.header.1);

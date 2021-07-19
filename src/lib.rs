@@ -28,7 +28,7 @@ impl Qpack {
             let (both_match, on_static, idx) = self.table.find_index(&header);
             let idx = if idx != (1 << 32) - 1 && !on_static {
                 // absolute to relative conversion
-                self.table.dynamic_table.insert_count - 1 - idx
+                self.table.get_insert_count() - 1 - idx
             } else { idx };
 
             if both_match && !on_static {
@@ -73,12 +73,12 @@ impl Qpack {
     }
     // TODO: check whether to update state
     pub fn encode_insert_count_increment(&self, encoded: &mut Vec<u8>) -> Result<usize, Box<dyn error::Error>> {
-        let increment = self.table.dynamic_table.list.len() - self.table.dynamic_table.acked_section;
+        let increment = self.table.dynamic_table.list.len() - self.table.dynamic_table.known_received_count;
         self.decoder.insert_count_increment(encoded, increment)?;
         Ok(increment)
     }
     pub fn commit_insert_count_increment(&mut self, increment: usize) -> Result<(), Box<dyn error::Error>> {
-        self.table.dynamic_table.acked_section += increment;
+        self.table.dynamic_table.known_received_count += increment;
         Ok(())
     }
     pub fn encode_headers(&self, encoded: &mut Vec<u8>, relative_indexing: bool, headers: Vec<Header>) -> Result<usize, Box<dyn error::Error>> {
@@ -177,10 +177,10 @@ impl Qpack {
                 len
             } else { // wire[idx] & Instruction::INSERT_COUNT_INCREMENT == Instruction::INSERT_COUNT_INCREMENT
                 let (len, increment) = self.encoder.insert_count_increment(wire, idx)?;
-                if increment == 0 || self.encoder.known_sending_count < self.table.dynamic_table.acked_section + increment {
+                if increment == 0 || self.encoder.known_sending_count < self.table.dynamic_table.known_received_count + increment {
                     return Err(DecoderStreamError.into());
                 }
-                self.table.dynamic_table.acked_section += increment;
+                self.table.dynamic_table.known_received_count += increment;
                 len
             };
         }
