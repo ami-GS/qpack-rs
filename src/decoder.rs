@@ -28,12 +28,11 @@ impl Decoder {
     }
 
     // Decode Encoder instructions
-    pub fn dynamic_table_capacity(&self, wire: &Vec<u8>, idx: usize, table: &mut Table) -> Result<usize, Box<dyn error::Error>> {
+    pub fn dynamic_table_capacity(&self, wire: &Vec<u8>, idx: usize) -> Result<(usize, usize), Box<dyn error::Error>> {
         let (len1, cap) = Qnum::decode(wire, idx, 5);
-        table.set_dynamic_table_capacity(cap as usize)?;
-        Ok(len1)
+        Ok((len1, cap as usize))
     }
-    pub fn insert_with_name_reference(&self, wire: &Vec<u8>, idx: usize, table: &mut Table) -> Result<usize, Box<dyn error::Error>> {
+    pub fn insert_with_name_reference(&self, wire: &Vec<u8>, idx: usize) -> Result<(usize, (usize, String, bool)), Box<dyn error::Error>> {
         let on_static_table = wire[idx] & 0b01000000 == 0b01000000;
         let (len1, name_idx) = Qnum::decode(wire, idx, 6);
         let (len2, value_len) = Qnum::decode(wire, idx + len1, 7);
@@ -41,10 +40,9 @@ impl Decoder {
             &wire[(idx + len1 + len2)..(idx + len1 + len2 + value_len as usize)],
         )?;
         // TODO: check "H" bit
-        table.insert_with_name_reference(name_idx as usize, value.to_string(), on_static_table)?;
-        Ok(len1 + len2 + value_len as usize)
+        Ok((len1 + len2 + value_len as usize, (name_idx as usize, value.to_string(), on_static_table)))
     }
-    pub fn insert_with_literal_name(&self, wire: &Vec<u8>, idx: usize, table: &mut Table) -> Result<usize, Box<dyn error::Error>> {
+    pub fn insert_with_literal_name(&self, wire: &Vec<u8>, idx: usize) -> Result<(usize, (String, String)), Box<dyn error::Error>> {
         // TODO: check "H" bits
         let (len1, name_len) = Qnum::decode(wire, idx, 5);
         let name = std::str::from_utf8(&wire[(idx + len1)..(idx + len1 + name_len as usize)])?;
@@ -53,13 +51,11 @@ impl Decoder {
         let value = std::str::from_utf8(
             &wire[(idx + len1 + len2 + name_len as usize)..(idx + len1 + len2 + name_len as usize + value_len as usize)],
         )?;
-        table.insert_with_literal_name(name.to_string(), value.to_string())?;
-        Ok(len1 + len2 + name_len as usize + value_len as usize)
+        Ok((len1 + len2 + name_len as usize + value_len as usize, (name.to_string(), value.to_string())))
     }
-    pub fn duplicate(&self, wire: &Vec<u8>, idx: usize, table: &mut Table) -> Result<usize, Box<dyn error::Error>> {
+    pub fn duplicate(&self, wire: &Vec<u8>, idx: usize) -> Result<(usize, usize), Box<dyn error::Error>> {
         let (len, index) = Qnum::decode(wire, idx, 5);
-        table.duplicate(index as usize)?;
-        Ok(len)
+        Ok((len, index as usize))
     }
     pub fn ack_section(&mut self, stream_id: u16) -> usize {
         // TOOD: remove unwrap

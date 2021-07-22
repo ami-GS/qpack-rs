@@ -3,6 +3,7 @@ use crate::encoder::Encoder;
 use crate::table::Table;
 use core::fmt;
 use std::error;
+use std::sync::{Arc, RwLock};
 
 mod decoder;
 mod dynamic_table;
@@ -12,7 +13,7 @@ mod table;
 pub struct Qpack {
     encoder: Encoder,
     decoder: Decoder,
-    table: Table,
+    table: Arc<RwLock<Table>>,
 }
 
 impl Qpack {
@@ -20,15 +21,15 @@ impl Qpack {
         Qpack {
             encoder: Encoder::new(),
             decoder: Decoder::new(),
-            table: Table::new(dynamic_table_max_capacity),
+            table: Arc::new(RwLock::new(Table::new(dynamic_table_max_capacity))),
         }
     }
     pub fn encode_insert_headers(&self, encoded: &mut Vec<u8>, headers: Vec<Header>) -> Result<(), Box<dyn error::Error>> {
         for header in headers {
-            let (both_match, on_static, idx) = self.table.find_index(&header);
+            let (both_match, on_static, idx) = self.table.read().unwrap().find_index(&header);
             let idx = if idx != (1 << 32) - 1 && !on_static {
                 // absolute to relative conversion
-                self.table.get_insert_count() - 1 - idx
+                self.table.read().unwrap().get_insert_count() - 1 - idx
             } else { idx };
 
             if both_match && !on_static {
@@ -45,7 +46,7 @@ impl Qpack {
     pub fn insert_headers(&mut self, headers: Vec<Header>) -> Result<(), Box<dyn error::Error>> {
         let count =  headers.len();
         for header in headers {
-            self.table.insert(header)?;
+            self.table.write().unwrap().insert(header)?;
         }
         self.encoder.known_sending_count += count;
         Ok(())
@@ -54,14 +55,14 @@ impl Qpack {
         self.encoder.set_dynamic_table_capacity(encoded, capacity)
     }
     pub fn commit_set_dynamic_table_capacity(&mut self, capacity: usize) -> Result<(), Box<dyn error::Error>> {
-        self.table.set_dynamic_table_capacity(capacity)
+        self.table.write().unwrap().set_dynamic_table_capacity(capacity)
     }
     pub fn encode_section_ackowledgment(&self, encoded: &mut Vec<u8>, stream_id: u16) -> Result<(), Box<dyn error::Error>> {
         self.decoder.section_ackowledgment(encoded, stream_id)
     }
     pub fn commit_section_ackowledgment(&mut self, stream_id: u16) -> Result<(), Box<dyn error::Error>> {
         let section = self.decoder.ack_section(stream_id);
-        self.table.dynamic_table.ack_section(section);
+        self.table.write().unwrap().dynamic_table.ack_section(section);
         Ok(())
     }
     pub fn encode_stream_cancellation(&self, encoded: &mut Vec<u8>, stream_id: u16) -> Result<(), Box<dyn error::Error>> {
@@ -73,27 +74,27 @@ impl Qpack {
     }
     // TODO: check whether to update state
     pub fn encode_insert_count_increment(&self, encoded: &mut Vec<u8>) -> Result<usize, Box<dyn error::Error>> {
-        let increment = self.table.dynamic_table.list.len() - self.table.dynamic_table.known_received_count;
+        let increment = self.table.read().unwrap().dynamic_table.list.len() - self.table.read().unwrap().dynamic_table.known_received_count;
         self.decoder.insert_count_increment(encoded, increment)?;
         Ok(increment)
     }
     pub fn commit_insert_count_increment(&mut self, increment: usize) -> Result<(), Box<dyn error::Error>> {
-        self.table.dynamic_table.known_received_count += increment;
+        self.table.write().unwrap().dynamic_table.known_received_count += increment;
         Ok(())
     }
     pub fn encode_headers(&self, encoded: &mut Vec<u8>, relative_indexing: bool, headers: Vec<Header>) -> Result<usize, Box<dyn error::Error>> {
         // TODO: decide whether to use s_flag (relative indexing)
-        let required_insert_count = self.table.get_insert_count();
+        let required_insert_count = self.table.read().unwrap().get_insert_count();
         // TODO: suspicious
         let base = if relative_indexing {
             0
         } else {
-            self.table.dynamic_table.insert_count as u32
+            self.table.read().unwrap().dynamic_table.insert_count as u32
         };
-        self.encoder.prefix(encoded, &self.table, required_insert_count as u32, relative_indexing, base);
+        self.encoder.prefix(encoded, &self.table.read().unwrap(), required_insert_count as u32, relative_indexing, base);
 
         for header in headers {
-            let (both_match, on_static, idx) = self.table.find_index(&header);
+            let (both_match, on_static, idx) = self.table.read().unwrap().find_index(&header);
             if both_match {
                 if relative_indexing {
                     self.encoder.indexed_post_base_index(encoded, idx as u32);
@@ -120,7 +121,7 @@ impl Qpack {
 
     pub fn decode_headers(&mut self, wire: &Vec<u8>, stream_id: u16) -> Result<(Vec<Header>, bool), Box<dyn error::Error>> {
         let mut idx = 0;
-        let (len, requred_insert_count, base) = self.decoder.prefix(wire, idx, &self.table)?;
+        let (len, requred_insert_count, base) = self.decoder.prefix(wire, idx, &self.table.read().unwrap())?;
         idx += len;
 
         // blocked if dynamic_table.insert_count < requred_insert_count
@@ -131,15 +132,15 @@ impl Qpack {
         let mut ref_dynamic = false;
         while idx < wire_len {
             let ret = if wire[idx] & FieldType::INDEXED == FieldType::INDEXED {
-                self.decoder.indexed(wire, &mut idx, base, &self.table)?
+                self.decoder.indexed(wire, &mut idx, base, &self.table.read().unwrap())?
             } else if wire[idx] & FieldType::LITERAL_NAME_REFERENCE == FieldType::LITERAL_NAME_REFERENCE {
-                self.decoder.literal_name_reference(wire, &mut idx, base, &self.table)?
+                self.decoder.literal_name_reference(wire, &mut idx, base, &self.table.read().unwrap())?
             } else if wire[idx] & FieldType::LITERAL_LITERAL_NAME == FieldType::LITERAL_LITERAL_NAME {
                 self.decoder.literal_literal_name(wire, &mut idx)?
             } else if wire[idx] & FieldType::INDEXED_POST_BASE_INDEX == FieldType::INDEXED_POST_BASE_INDEX {
-                self.decoder.indexed_post_base_index(wire, &mut idx, base, &self.table)?
+                self.decoder.indexed_post_base_index(wire, &mut idx, base, &self.table.read().unwrap())?
             } else if wire[idx] & 0b11110000 == FieldType::LITERAL_POST_BASE_NAME_REFERENCE {
-                self.decoder.literal_post_base_name_reference(wire, &mut idx, base, &self.table)?
+                self.decoder.literal_post_base_name_reference(wire, &mut idx, base, &self.table.read().unwrap())?
             } else {
                 return Err(DecompressionFailed.into());
             };
@@ -149,45 +150,71 @@ impl Qpack {
         self.decoder.pending_sections.insert(stream_id, requred_insert_count as usize);
         Ok((headers, ref_dynamic))
     }
-    pub fn decode_encoder_instruction(&mut self, wire: &Vec<u8>) -> Result<(), Box<dyn error::Error>> {
+    pub fn decode_encoder_instruction(&self, wire: &Vec<u8>) -> Result<Box<dyn FnOnce() -> Result<(), Box<dyn error::Error>>>,
+                                                                        Box<dyn error::Error>> {
         let mut idx = 0;
         let wire_len = wire.len();
+        let mut commit_funcs: Vec<Box<dyn FnOnce() -> Result<(), Box<dyn error::Error>>>> = vec![];
+
         while idx < wire_len {
+            let table_c = Arc::clone(&self.table);
             idx += if wire[idx] & encoder::Instruction::INSERT_WITH_NAME_REFERENCE == encoder::Instruction::INSERT_WITH_NAME_REFERENCE {
-                self.decoder.insert_with_name_reference(wire, idx, &mut self.table)?
+                let (output, input) = self.decoder.insert_with_name_reference(wire, idx)?;
+                commit_funcs.push(Box::new(move || -> Result<(), Box<dyn error::Error>> {
+                    table_c.write().unwrap().insert_with_name_reference(input.0, input.1, input.2)
+                }));
+                output
             } else if wire[idx] & encoder::Instruction::INSERT_WITH_LITERAL_NAME == encoder::Instruction::INSERT_WITH_LITERAL_NAME {
-                self.decoder.insert_with_literal_name(wire, idx, &mut self.table)?
+                let (output, input) = self.decoder.insert_with_literal_name(wire, idx)?;
+                commit_funcs.push(Box::new(move || -> Result<(), Box<dyn error::Error>> {
+                    table_c.write().unwrap().insert_with_literal_name(input.0, input.1)
+                }));
+                output
             } else if wire[idx] & encoder::Instruction::SET_DYNAMIC_TABLE_CAPACITY == encoder::Instruction::SET_DYNAMIC_TABLE_CAPACITY {
-                self.decoder.dynamic_table_capacity(wire, idx, &mut self.table)?
+                let (output, input) = self.decoder.dynamic_table_capacity(wire, idx)?;
+                commit_funcs.push(Box::new(move || -> Result<(), Box<dyn error::Error>> {
+                    table_c.write().unwrap().set_dynamic_table_capacity(input)
+                }));
+                output
             } else { // if wire[idx] & encoder::Instruction::DUPLICATE == encoder::Instruction::DUPLICATE
-                self.decoder.duplicate(wire, idx, &mut self.table)?
+                let (output, input) = self.decoder.duplicate(wire, idx)?;
+                commit_funcs.push(Box::new(move || -> Result<(), Box<dyn error::Error>> {
+                    table_c.write().unwrap().duplicate(input)
+                }));
+                output
             };
         }
-        Ok(())
+        Ok(Box::new(move || -> Result<(), Box<dyn error::Error>> {
+            for f in commit_funcs {
+                f()?;
+            }
+            Ok(())
+        }))
     }
+
     pub fn decode_decoder_instruction(&mut self, wire: &Vec<u8>) -> Result<(), Box<dyn error::Error>> {
         let mut idx = 0;
         let wire_len = wire.len();
         while idx < wire_len {
             idx += if wire[idx] & decoder::Instruction::SECTION_ACKNOWLEDGMENT == decoder::Instruction::SECTION_ACKNOWLEDGMENT {
-                let (len, _stream_id) = self.encoder.section_ackowledgment(wire, idx, &mut self.table)?;
+                let (len, _stream_id) = self.encoder.section_ackowledgment(wire, idx, &mut self.table.write().unwrap())?;
                 len
             } else if wire[idx] & decoder::Instruction::STREAM_CANCELLATION == decoder::Instruction::STREAM_CANCELLATION {
                 let (len, _stream_id) = self.encoder.stream_cancellation(wire, idx)?;
                 len
             } else { // wire[idx] & Instruction::INSERT_COUNT_INCREMENT == Instruction::INSERT_COUNT_INCREMENT
                 let (len, increment) = self.encoder.insert_count_increment(wire, idx)?;
-                if increment == 0 || self.encoder.known_sending_count < self.table.dynamic_table.known_received_count + increment {
+                if increment == 0 || self.encoder.known_sending_count < self.table.read().unwrap().dynamic_table.known_received_count + increment {
                     return Err(DecoderStreamError.into());
                 }
-                self.table.dynamic_table.known_received_count += increment;
+                self.table.write().unwrap().dynamic_table.known_received_count += increment;
                 len
             };
         }
         Ok(())
     }
     pub fn dump_dynamic_table(&self) {
-        self.table.dump_dynamic_table();
+        self.table.read().unwrap().dump_dynamic_table();
     }
 }
 
@@ -432,7 +459,8 @@ mod tests {
                                     0x65, 0x2f, 0x70, 0x61, 0x74, 0x68]);
             let _ = qpack_encoder.insert_headers(headers);
 
-            let _ = qpack_decoder.decode_encoder_instruction(&encoded);
+            let commit_func = qpack_decoder.decode_encoder_instruction(&encoded);
+            let _ = commit_func.unwrap()();
 
             qpack_encoder.dump_dynamic_table();
             qpack_decoder.dump_dynamic_table();
@@ -479,7 +507,8 @@ mod tests {
                                     0x61, 0x6c, 0x75, 0x65]);
             let _ = qpack_encoder.insert_headers(headers);
 
-            let _ = qpack_decoder.decode_encoder_instruction(&encoded);
+            let commit_func = qpack_decoder.decode_encoder_instruction(&encoded);
+            let _ = commit_func.unwrap()();
             println!("dump encoder side dynamic table");
             qpack_encoder.dump_dynamic_table();
             println!("dump decoder side dynamic table");
@@ -507,7 +536,8 @@ mod tests {
             assert_eq!(encoded, vec![0x02]);
             let _ = qpack_encoder.insert_headers(headers);
 
-            let _= qpack_decoder.decode_encoder_instruction(&encoded);
+            let commit_func = qpack_decoder.decode_encoder_instruction(&encoded);
+            let _ = commit_func.unwrap()();
 
             qpack_encoder.dump_dynamic_table();
             qpack_decoder.dump_dynamic_table();
@@ -551,7 +581,8 @@ mod tests {
                                      0x2d, 0x76, 0x61, 0x6c, 0x75, 0x65, 0x32]);
             let _ = qpack_encoder.insert_headers(headers);
 
-            let _ = qpack_decoder.decode_encoder_instruction(&encoded);
+            let commit_func = qpack_decoder.decode_encoder_instruction(&encoded);
+            let _ = commit_func.unwrap()();
 
             println!("dump encoder side dynamic table");
             qpack_encoder.dump_dynamic_table();
