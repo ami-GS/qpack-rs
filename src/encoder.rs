@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::error;
+use std::sync::{Arc, RwLock};
 
 use crate::{table::Table, Header};
 use crate::{FieldType, Qnum};
@@ -15,7 +16,7 @@ impl Instruction {
 pub struct Encoder {
     // $2.1.1.1
     _draining_idx: u32,
-    pub known_sending_count: usize,
+    pub known_sending_count: Arc<RwLock<usize>>, // TODO: requred?
     pub pending_sections: HashMap<u16, usize>, // experimental
 }
 
@@ -23,7 +24,7 @@ impl Encoder {
     pub fn new() -> Self {
         Self {
             _draining_idx: 0,
-            known_sending_count: 0,
+            known_sending_count: Arc::new(RwLock::new(0)),
             pending_sections: HashMap::new(),
         }
     }
@@ -43,7 +44,7 @@ impl Encoder {
         encoded[wire_len - len] |= Instruction::SET_DYNAMIC_TABLE_CAPACITY;
         Ok(())
     }
-    pub fn insert_with_name_reference(&self, encoded: &mut Vec<u8>, on_static: bool, name_idx: usize, value: String) -> Result<(), Box<dyn error::Error>> {
+    pub fn insert_with_name_reference(&self, encoded: &mut Vec<u8>, on_static: bool, name_idx: usize, value: &str) -> Result<(), Box<dyn error::Error>> {
         let len = Qnum::encode(encoded, name_idx as u32, 6);
         let wire_len = encoded.len();
         if on_static { // "T" bit
@@ -55,7 +56,7 @@ impl Encoder {
         encoded.append(&mut value.as_bytes().to_vec());
         Ok(())
     }
-    pub fn insert_with_literal_name(&self, encoded: &mut Vec<u8>, name: String, value: String) -> Result<(), Box<dyn error::Error>> {
+    pub fn insert_with_literal_name(&self, encoded: &mut Vec<u8>, name: &str, value: &str) -> Result<(), Box<dyn error::Error>> {
         let len = Qnum::encode(encoded, name.len() as u32, 5);
         let wire_len = encoded.len();
         encoded[wire_len - len] |= Instruction::INSERT_WITH_LITERAL_NAME;

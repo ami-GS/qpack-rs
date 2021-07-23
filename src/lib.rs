@@ -24,9 +24,11 @@ impl Qpack {
             table: Arc::new(RwLock::new(Table::new(dynamic_table_max_capacity))),
         }
     }
-    pub fn encode_insert_headers(&self, encoded: &mut Vec<u8>, headers: Vec<Header>) -> Result<(), Box<dyn error::Error>> {
-        for header in headers {
-            let (both_match, on_static, idx) = self.table.read().unwrap().find_index(&header);
+    pub fn encode_insert_headers(&self, encoded: &mut Vec<u8>, headers: Vec<Header>)
+        -> Result<Box<dyn FnOnce() -> Result<(), Box<dyn error::Error>>>,
+                    Box<dyn error::Error>> {
+        for header in &headers {
+            let (both_match, on_static, idx) = self.table.read().unwrap().find_index(header);
             let idx = if idx != (1 << 32) - 1 && !on_static {
                 // absolute to relative conversion
                 self.table.read().unwrap().get_insert_count() - 1 - idx
@@ -35,27 +37,31 @@ impl Qpack {
             if both_match && !on_static {
                 self.encoder.duplicate(encoded, idx)?;
             } else if idx != (1 << 32) - 1 {
-                self.encoder.insert_with_name_reference(encoded, on_static, idx, header.1)?;
+                self.encoder.insert_with_name_reference(encoded, on_static, idx, &header.1)?;
             } else {
-                self.encoder.insert_with_literal_name(encoded, header.0, header.1)?;
+                self.encoder.insert_with_literal_name(encoded, &header.0, &header.1)?;
             }
         }
-        Ok(())
+        let table = Arc::clone(&self.table);
+        let known_sending_count = Arc::clone(&self.encoder.known_sending_count);
+        Ok(Box::new(move || -> Result<(), Box<dyn error::Error>> {
+            let mut locked = table.write().unwrap();
+            let count = headers.len();
+            for header in headers {
+                locked.insert(header)?;
+            }
+            (*known_sending_count.write().unwrap()) += count;
+            Ok(())
+        }))
     }
-    // TODO: can be optimized
-    pub fn insert_headers(&mut self, headers: Vec<Header>) -> Result<(), Box<dyn error::Error>> {
-        let count =  headers.len();
-        for header in headers {
-            self.table.write().unwrap().insert(header)?;
-        }
-        self.encoder.known_sending_count += count;
-        Ok(())
-    }
-    pub fn encode_set_dynamic_table_capacity(&self, encoded: &mut Vec<u8>, capacity: usize) -> Result<(), Box<dyn error::Error>> {
-        self.encoder.set_dynamic_table_capacity(encoded, capacity)
-    }
-    pub fn commit_set_dynamic_table_capacity(&mut self, capacity: usize) -> Result<(), Box<dyn error::Error>> {
-        self.table.write().unwrap().set_dynamic_table_capacity(capacity)
+    pub fn encode_set_dynamic_table_capacity(&self, encoded: &mut Vec<u8>, capacity: usize)
+        -> Result<Box<dyn FnOnce() -> Result<(), Box<dyn error::Error>>>,
+                  Box<dyn error::Error>> {
+        self.encoder.set_dynamic_table_capacity(encoded, capacity)?;
+        let table_c = Arc::clone(&self.table);
+        Ok(Box::new(move || -> Result<(), Box<dyn error::Error>> {
+            table_c.write().unwrap().set_dynamic_table_capacity(capacity)
+        }))
     }
     pub fn encode_section_ackowledgment(&self, encoded: &mut Vec<u8>, stream_id: u16) -> Result<(), Box<dyn error::Error>> {
         self.decoder.section_ackowledgment(encoded, stream_id)
@@ -73,10 +79,16 @@ impl Qpack {
         Ok(())
     }
     // TODO: check whether to update state
-    pub fn encode_insert_count_increment(&self, encoded: &mut Vec<u8>) -> Result<usize, Box<dyn error::Error>> {
+    pub fn encode_insert_count_increment(&self, encoded: &mut Vec<u8>)
+        -> Result<Box<dyn FnOnce() -> Result<(), Box<dyn error::Error>>>,
+                    Box<dyn error::Error>> {
         let increment = self.table.read().unwrap().dynamic_table.list.len() - self.table.read().unwrap().dynamic_table.known_received_count;
         self.decoder.insert_count_increment(encoded, increment)?;
-        Ok(increment)
+        let table_c = Arc::clone(&self.table);
+        Ok(Box::new(move || -> Result<(), Box<dyn error::Error>> {
+            table_c.write().unwrap().dynamic_table.known_received_count += increment;
+            Ok(())
+        }))
     }
     pub fn commit_insert_count_increment(&mut self, increment: usize) -> Result<(), Box<dyn error::Error>> {
         self.table.write().unwrap().dynamic_table.known_received_count += increment;
@@ -204,7 +216,7 @@ impl Qpack {
                 len
             } else { // wire[idx] & Instruction::INSERT_COUNT_INCREMENT == Instruction::INSERT_COUNT_INCREMENT
                 let (len, increment) = self.encoder.insert_count_increment(wire, idx)?;
-                if increment == 0 || self.encoder.known_sending_count < self.table.read().unwrap().dynamic_table.known_received_count + increment {
+                if increment == 0 || *self.encoder.known_sending_count.read().unwrap() < self.table.read().unwrap().dynamic_table.known_received_count + increment {
                     return Err(DecoderStreamError.into());
                 }
                 self.table.write().unwrap().dynamic_table.known_received_count += increment;
@@ -446,21 +458,24 @@ mod tests {
         {   // encoder instruction
             let mut encoded = vec![];
             let capacity = 220;
-            let _ = qpack_encoder.encode_set_dynamic_table_capacity(&mut encoded, capacity);
-            let _ = qpack_encoder.commit_set_dynamic_table_capacity(capacity);
+            let commit_func = qpack_encoder.encode_set_dynamic_table_capacity(&mut encoded, capacity);
+            let out = commit_func.unwrap()();
+            assert_eq!(out.unwrap(), ());
             let headers = vec![Header::from(":authority", "www.example.com"),
                                           Header::from(":path", "/sample/path")];
 
-            let _ = qpack_encoder.encode_insert_headers(&mut encoded, headers.clone());
+            let commit_func = qpack_encoder.encode_insert_headers(&mut encoded, headers);
             assert_eq!(encoded, vec![0x3f, 0xbd, 0x01, 0xc0, 0x0f, 0x77, 0x77,
                                     0x77, 0x2e, 0x65, 0x78, 0x61, 0x6d, 0x70,
                                     0x6c, 0x65, 0x2e, 0x63, 0x6f, 0x6d, 0xc1,
                                     0x0c, 0x2f, 0x73, 0x61, 0x6d, 0x70, 0x6c,
                                     0x65, 0x2f, 0x70, 0x61, 0x74, 0x68]);
-            let _ = qpack_encoder.insert_headers(headers);
+            let out = commit_func.unwrap()();
+            assert_eq!(out.unwrap(), ());
 
             let commit_func = qpack_decoder.decode_encoder_instruction(&encoded);
-            let _ = commit_func.unwrap()();
+            let out = commit_func.unwrap()();
+            assert_eq!(out.unwrap(), ());
 
             qpack_encoder.dump_dynamic_table();
             qpack_decoder.dump_dynamic_table();
@@ -501,14 +516,17 @@ mod tests {
         {   // encoder instruction
             let mut encoded = vec![];
             let headers = vec![Header::from("custom-key", "custom-value")];
-            let _ = qpack_encoder.encode_insert_headers(&mut encoded, headers.clone());
+            let commit_func = qpack_encoder.encode_insert_headers(&mut encoded, headers);
             assert_eq!(encoded, vec![0x4a, 0x63, 0x75, 0x73, 0x74, 0x6f, 0x6d, 0x2d, 0x6b, 0x65,
                                     0x79, 0x0c, 0x63, 0x75, 0x73, 0x74, 0x6f, 0x6d, 0x2d, 0x76,
                                     0x61, 0x6c, 0x75, 0x65]);
-            let _ = qpack_encoder.insert_headers(headers);
+            let out = commit_func.unwrap()();
+            assert_eq!(out.unwrap(), ());
 
             let commit_func = qpack_decoder.decode_encoder_instruction(&encoded);
-            let _ = commit_func.unwrap()();
+            let out = commit_func.unwrap()();
+            assert_eq!(out.unwrap(), ());
+
             println!("dump encoder side dynamic table");
             qpack_encoder.dump_dynamic_table();
             println!("dump decoder side dynamic table");
@@ -518,9 +536,10 @@ mod tests {
         println!("Step 5");
         {   // decoder instruction
             let mut encoded = vec![];
-            let increment = qpack_decoder.encode_insert_count_increment(&mut encoded).unwrap();
+            let commit_func = qpack_decoder.encode_insert_count_increment(&mut encoded);
             assert_eq!(encoded, vec![0x01]);
-            let _ = qpack_decoder.commit_insert_count_increment(increment);
+            let out = commit_func.unwrap()();
+            assert_eq!(out.unwrap(), ());
 
             let _ = qpack_encoder.decode_decoder_instruction(&encoded);
 
@@ -532,12 +551,14 @@ mod tests {
         {   // encoder instruction
             let mut encoded = vec![];
             let headers = vec![Header::from(":authority", "www.example.com")];
-            let _ = qpack_encoder.encode_insert_headers(&mut encoded, headers.clone());
+            let commit_func = qpack_encoder.encode_insert_headers(&mut encoded, headers);
             assert_eq!(encoded, vec![0x02]);
-            let _ = qpack_encoder.insert_headers(headers);
+            let out = commit_func.unwrap()();
+            assert_eq!(out.unwrap(), ());
 
             let commit_func = qpack_decoder.decode_encoder_instruction(&encoded);
-            let _ = commit_func.unwrap()();
+            let out = commit_func.unwrap()();
+            assert_eq!(out.unwrap(), ());
 
             qpack_encoder.dump_dynamic_table();
             qpack_decoder.dump_dynamic_table();
@@ -576,10 +597,11 @@ mod tests {
         {   // encoder instruction
             let mut encoded = vec![];
             let headers = vec![Header::from("custom-key", "custom-value2")];
-            let _ = qpack_encoder.encode_insert_headers(&mut encoded, headers.clone());
+            let commit_func = qpack_encoder.encode_insert_headers(&mut encoded, headers);
             assert_eq!(encoded, vec![0x81, 0x0d, 0x63, 0x75, 0x73, 0x74, 0x6f, 0x6d,
                                      0x2d, 0x76, 0x61, 0x6c, 0x75, 0x65, 0x32]);
-            let _ = qpack_encoder.insert_headers(headers);
+            let out = commit_func.unwrap()();
+            assert_eq!(out.unwrap(), ());
 
             let commit_func = qpack_decoder.decode_encoder_instruction(&encoded);
             let _ = commit_func.unwrap()();
