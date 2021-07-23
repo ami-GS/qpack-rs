@@ -16,7 +16,6 @@ pub struct Encoder {
     // $2.1.1.1
     _draining_idx: u32,
     pub known_sending_count: usize,
-    pub known_received_count: usize,
     pub pending_sections: HashMap<u16, usize>, // experimental
 }
 
@@ -25,7 +24,6 @@ impl Encoder {
         Self {
             _draining_idx: 0,
             known_sending_count: 0,
-            known_received_count: 0, // can be covered by acked_section
             pending_sections: HashMap::new(),
         }
     }

@@ -11,7 +11,6 @@ impl Instruction {
 
 pub struct Decoder {
     _size: usize,
-    pub known_received_count: u32,
     pub pending_sections: HashMap<u16, usize>, // experimental
 }
 
@@ -19,14 +18,9 @@ impl Decoder {
     pub fn new() -> Self {
         Self {
             _size: 0,
-            known_received_count: 0,
             pending_sections: HashMap::new(),
         }
     }
-    pub fn _get_known_received_count(&self) -> u32 {
-        self.known_received_count
-    }
-
     // Decode Encoder instructions
     pub fn dynamic_table_capacity(&self, wire: &Vec<u8>, idx: usize) -> Result<(usize, usize), Box<dyn error::Error>> {
         let (len1, cap) = Qnum::decode(wire, idx, 5);
