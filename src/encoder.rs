@@ -40,6 +40,9 @@ impl Encoder {
     pub fn cancel_section(&mut self, stream_id: u16) {
         self.pending_sections.remove(&stream_id);
     }
+    pub fn has_section(&self, stream_id: u16) -> bool {
+        self.pending_sections.contains_key(&stream_id)
+    }
     // Encode Encoder instructions
     // WARN: confusing name
     pub fn set_dynamic_table_capacity(&self, encoded: &mut Vec<u8>, cap: usize) -> Result<(), Box<dyn error::Error>> {

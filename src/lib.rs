@@ -134,7 +134,9 @@ impl Qpack {
         }
         let encoder = Arc::clone(&self.encoder);
         Ok(Box::new(move || -> Result<(), Box<dyn error::Error>> {
-            encoder.write().unwrap().add_section(stream_id, required_insert_count);
+            if required_insert_count != 0 {
+                encoder.write().unwrap().add_section(stream_id, required_insert_count);
+            }
             Ok(())
         }))
     }
@@ -170,7 +172,9 @@ impl Qpack {
         }
         drop(decoder);
         // ?
-        self.decoder.write().unwrap().add_section(stream_id, requred_insert_count as usize);
+        if requred_insert_count != 0 {
+            self.decoder.write().unwrap().add_section(stream_id, requred_insert_count as usize);
+        }
         Ok((headers, ref_dynamic))
     }
     pub fn decode_encoder_instruction(&self, wire: &Vec<u8>)
@@ -228,6 +232,10 @@ impl Qpack {
         while idx < wire_len {
             idx += if wire[idx] & decoder::Instruction::SECTION_ACKNOWLEDGMENT == decoder::Instruction::SECTION_ACKNOWLEDGMENT {
                 let (len, stream_id) = encoder.section_ackowledgment(wire, idx)?;
+                if !encoder.has_section(stream_id) {
+                    // section has already been acked
+                    return Err(DecoderStreamError.into());
+                }
                 let encoder_c = Arc::clone(&self.encoder);
                 let table = Arc::clone(&self.table);
                 commit_funcs.push(Box::new(move || -> Result<(), Box<dyn error::Error>> {
