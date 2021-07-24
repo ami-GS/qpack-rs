@@ -51,6 +51,9 @@ impl Decoder {
         let (len, index) = Qnum::decode(wire, idx, 5);
         Ok((len, index as usize))
     }
+    pub fn add_section(&mut self, stream_id: u16, required_insert_count: usize) {
+        self.pending_sections.insert(stream_id, required_insert_count);
+    }
     pub fn ack_section(&mut self, stream_id: u16) -> usize {
         // TOOD: remove unwrap
         let section = self.pending_sections.get(&stream_id).unwrap().clone();

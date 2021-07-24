@@ -28,16 +28,20 @@ impl Encoder {
             pending_sections: HashMap::new(),
         }
     }
-    fn ack_section(&mut self, stream_id: u16) -> usize {
+    pub fn add_section(&mut self, stream_id: u16, required_insert_count: usize) {
+        self.pending_sections.insert(stream_id, required_insert_count);
+    }
+    pub fn ack_section(&mut self, stream_id: u16) -> usize {
         // TOOD: remove unwrap
         let section = self.pending_sections.get(&stream_id).unwrap().clone();
         self.pending_sections.remove(&stream_id);
         section
     }
-    fn cancel_section(&mut self, stream_id: u16) {
+    pub fn cancel_section(&mut self, stream_id: u16) {
         self.pending_sections.remove(&stream_id);
     }
     // Encode Encoder instructions
+    // WARN: confusing name
     pub fn set_dynamic_table_capacity(&self, encoded: &mut Vec<u8>, cap: usize) -> Result<(), Box<dyn error::Error>> {
         let len = Qnum::encode(encoded, cap as u32, 5);
         let wire_len = encoded.len();
@@ -73,16 +77,12 @@ impl Encoder {
     }
 
     // Decode Decoder instructions
-    pub fn section_ackowledgment(&mut self, wire: &Vec<u8>, idx: usize, table: &mut Table) -> Result<(usize, u16), Box<dyn error::Error>> {
+    pub fn section_ackowledgment(&self, wire: &Vec<u8>, idx: usize) -> Result<(usize, u16), Box<dyn error::Error>> {
         let (len, stream_id) = Qnum::decode(wire, idx, 7);
-
-        let section = self.ack_section(stream_id as u16);
-        table.ack_section(section);
         Ok((len, stream_id as u16))
     }
-    pub fn stream_cancellation(&mut self, wire: &Vec<u8>, idx: usize) -> Result<(usize, u16), Box<dyn error::Error>> {
+    pub fn stream_cancellation(&self, wire: &Vec<u8>, idx: usize) -> Result<(usize, u16), Box<dyn error::Error>> {
         let (len, stream_id) = Qnum::decode(wire, idx, 6);
-        self.cancel_section(stream_id as u16);
         Ok((len, stream_id as u16))
     }
     pub fn insert_count_increment(&self, wire: &Vec<u8>, idx: usize) -> Result<(usize, usize), Box<dyn error::Error>> {

@@ -1,6 +1,4 @@
-use std::cell::RefCell;
 use std::error;
-use std::rc::Rc;
 
 use crate::dynamic_table::DynamicTable;
 use crate::{DecompressionFailed, Header, StrHeader};
