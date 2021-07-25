@@ -13,7 +13,7 @@ mod table;
 pub struct Qpack {
     encoder: Arc<RwLock<Encoder>>,
     decoder: Arc<RwLock<Decoder>>,
-    table: Arc<RwLock<Table>>,
+    table: Table,
     blocked_streams_limit: u16,
     cv: Arc<(Mutex<usize>, Condvar)>,
 }
@@ -24,7 +24,7 @@ impl Qpack {
         Qpack {
             encoder: Arc::new(RwLock::new(Encoder::new())),
             decoder: Arc::new(RwLock::new(Decoder::new())),
-            table: Arc::new(RwLock::new(Table::new(dynamic_table_max_capacity, Arc::clone(&cv)))),
+            table: Table::new(dynamic_table_max_capacity, Arc::clone(&cv)),
             blocked_streams_limit,
             cv,
         }
@@ -33,10 +33,10 @@ impl Qpack {
         -> Result<Box<dyn FnOnce() -> Result<(), Box<dyn error::Error>>>,
                     Box<dyn error::Error>> {
         for header in &headers {
-            let (both_match, on_static, idx) = self.table.read().unwrap().find_index(header);
+            let (both_match, on_static, idx) = self.table.find_index(header);
             let idx = if idx != (1 << 32) - 1 && !on_static {
                 // absolute to relative conversion
-                self.table.read().unwrap().get_insert_count() - 1 - idx
+                self.table.get_insert_count() - 1 - idx
             } else { idx };
 
             if both_match && !on_static {
@@ -47,10 +47,10 @@ impl Qpack {
                 Encoder::insert_with_literal_name(encoded, &header.0, &header.1)?;
             }
         }
-        let table = Arc::clone(&self.table);
+        let dynamic_table = Arc::clone(&self.table.dynamic_table);
         let known_sending_count = Arc::clone(&self.encoder.read().unwrap().known_sending_count);
         Ok(Box::new(move || -> Result<(), Box<dyn error::Error>> {
-            let mut locked = table.write().unwrap();
+            let mut locked = dynamic_table.write().unwrap();
             let count = headers.len();
             for header in headers {
                 locked.insert(header)?;
@@ -63,9 +63,9 @@ impl Qpack {
         -> Result<Box<dyn FnOnce() -> Result<(), Box<dyn error::Error>>>,
                   Box<dyn error::Error>> {
         Encoder::set_dynamic_table_capacity(encoded, capacity)?;
-        let table_c = Arc::clone(&self.table);
+        let dynamic_table = Arc::clone(&self.table.dynamic_table);
         Ok(Box::new(move || -> Result<(), Box<dyn error::Error>> {
-            table_c.write().unwrap().set_dynamic_table_capacity(capacity)
+            dynamic_table.write().unwrap().set_capacity(capacity)
         }))
     }
     pub fn encode_section_ackowledgment(&self, encoded: &mut Vec<u8>, stream_id: u16)
@@ -74,10 +74,10 @@ impl Qpack {
         Decoder::section_ackowledgment(encoded, stream_id)?;
 
         let decoder = Arc::clone(&self.decoder);
-        let table = Arc::clone(&self.table);
+        let dynamic_table = Arc::clone(&self.table.dynamic_table);
         Ok(Box::new(move || -> Result<(), Box<dyn error::Error>> {
             let section = decoder.write().unwrap().ack_section(stream_id);
-            table.write().unwrap().dynamic_table.ack_section(section);
+            dynamic_table.write().unwrap().ack_section(section);
             Ok(())
         }))
     }
@@ -95,11 +95,12 @@ impl Qpack {
     pub fn encode_insert_count_increment(&self, encoded: &mut Vec<u8>)
         -> Result<Box<dyn FnOnce() -> Result<(), Box<dyn error::Error>>>,
                     Box<dyn error::Error>> {
-        let increment = self.table.read().unwrap().dynamic_table.list.len() - self.table.read().unwrap().dynamic_table.known_received_count;
+        let dynamic_table_read = self.table.dynamic_table.read().unwrap();
+        let increment = dynamic_table_read.list.len() - dynamic_table_read.known_received_count;
         Decoder::insert_count_increment(encoded, increment)?;
-        let table_c = Arc::clone(&self.table);
+        let dynamic_table = Arc::clone(&self.table.dynamic_table);
         Ok(Box::new(move || -> Result<(), Box<dyn error::Error>> {
-            table_c.write().unwrap().dynamic_table.known_received_count += increment;
+            dynamic_table.write().unwrap().known_received_count += increment;
             Ok(())
         }))
     }
@@ -107,17 +108,17 @@ impl Qpack {
         -> Result<Box<dyn FnOnce() -> Result<(), Box<dyn error::Error>>>,
                     Box<dyn error::Error>> {
         // TODO: decide whether to use s_flag (relative indexing)
-        let required_insert_count = self.table.read().unwrap().get_insert_count();
+        let required_insert_count = self.table.get_insert_count();
         // TODO: suspicious
         let base = if relative_indexing {
             0
         } else {
-            self.table.read().unwrap().get_insert_count() as u32
+            self.table.get_insert_count() as u32
         };
-        Encoder::prefix(encoded, &self.table.read().unwrap(), required_insert_count as u32, relative_indexing, base);
+        Encoder::prefix(encoded, &self.table, required_insert_count as u32, relative_indexing, base);
 
         for header in headers {
-            let (both_match, on_static, idx) = self.table.read().unwrap().find_index(&header);
+            let (both_match, on_static, idx) = self.table.find_index(&header);
             if both_match {
                 if relative_indexing {
                     Encoder::indexed_post_base_index(encoded, idx as u32);
@@ -146,12 +147,12 @@ impl Qpack {
 
     pub fn decode_headers(&self, wire: &Vec<u8>, stream_id: u16) -> Result<(Vec<Header>, bool), Box<dyn error::Error>> {
         let mut idx = 0;
-        let (len, requred_insert_count, base) = Decoder::prefix(wire, idx, &self.table.read().unwrap())?;
+        let (len, requred_insert_count, base) = Decoder::prefix(wire, idx, &self.table)?;
         idx += len;
 
         // blocked if dynamic_table.insert_count < requred_insert_count
         // OPTIMIZE: blocked just before referencing dynamic_table is better?
-        let insert_count = self.table.read().unwrap().get_insert_count();
+        let insert_count = self.table.get_insert_count();
         if insert_count < requred_insert_count as usize {
             if self.blocked_streams_limit == self.decoder.read().unwrap().current_blocked_streams + 1 {
                 return Err(DecompressionFailed.into());
@@ -170,15 +171,15 @@ impl Qpack {
         let mut ref_dynamic = false;
         while idx < wire_len {
             let ret = if wire[idx] & FieldType::INDEXED == FieldType::INDEXED {
-                Decoder::indexed(wire, &mut idx, base, &self.table.read().unwrap())?
+                Decoder::indexed(wire, &mut idx, base, &self.table)?
             } else if wire[idx] & FieldType::LITERAL_NAME_REFERENCE == FieldType::LITERAL_NAME_REFERENCE {
-                Decoder::literal_name_reference(wire, &mut idx, base, &self.table.read().unwrap())?
+                Decoder::literal_name_reference(wire, &mut idx, base, &self.table)?
             } else if wire[idx] & FieldType::LITERAL_LITERAL_NAME == FieldType::LITERAL_LITERAL_NAME {
                 Decoder::literal_literal_name(wire, &mut idx)?
             } else if wire[idx] & FieldType::INDEXED_POST_BASE_INDEX == FieldType::INDEXED_POST_BASE_INDEX {
-                Decoder::indexed_post_base_index(wire, &mut idx, base, &self.table.read().unwrap())?
+                Decoder::indexed_post_base_index(wire, &mut idx, base, &self.table)?
             } else if wire[idx] & 0b11110000 == FieldType::LITERAL_POST_BASE_NAME_REFERENCE {
-                Decoder::literal_post_base_name_reference(wire, &mut idx, base, &self.table.read().unwrap())?
+                Decoder::literal_post_base_name_reference(wire, &mut idx, base, &self.table)?
             } else {
                 return Err(DecompressionFailed.into());
             };
@@ -199,30 +200,21 @@ impl Qpack {
         let mut commit_funcs: Vec<Box<dyn FnOnce() -> Result<(), Box<dyn error::Error>>>> = vec![];
 
         while idx < wire_len {
-            let table_c = Arc::clone(&self.table);
             idx += if wire[idx] & encoder::Instruction::INSERT_WITH_NAME_REFERENCE == encoder::Instruction::INSERT_WITH_NAME_REFERENCE {
                 let (output, input) = Decoder::insert_with_name_reference(wire, idx)?;
-                commit_funcs.push(Box::new(move || -> Result<(), Box<dyn error::Error>> {
-                    table_c.write().unwrap().insert_with_name_reference(input.0, input.1, input.2)
-                }));
+                commit_funcs.push(self.table.insert_with_name_reference(input.0, input.1, input.2)?);
                 output
             } else if wire[idx] & encoder::Instruction::INSERT_WITH_LITERAL_NAME == encoder::Instruction::INSERT_WITH_LITERAL_NAME {
                 let (output, input) = Decoder::insert_with_literal_name(wire, idx)?;
-                commit_funcs.push(Box::new(move || -> Result<(), Box<dyn error::Error>> {
-                    table_c.write().unwrap().insert_with_literal_name(input.0, input.1)
-                }));
+                commit_funcs.push(self.table.insert_with_literal_name(input.0, input.1)?);
                 output
             } else if wire[idx] & encoder::Instruction::SET_DYNAMIC_TABLE_CAPACITY == encoder::Instruction::SET_DYNAMIC_TABLE_CAPACITY {
                 let (output, input) = Decoder::dynamic_table_capacity(wire, idx)?;
-                commit_funcs.push(Box::new(move || -> Result<(), Box<dyn error::Error>> {
-                    table_c.write().unwrap().set_dynamic_table_capacity(input)
-                }));
+                commit_funcs.push(self.table.set_dynamic_table_capacity(input)?);
                 output
             } else { // if wire[idx] & encoder::Instruction::DUPLICATE == encoder::Instruction::DUPLICATE
                 let (output, input) = Decoder::duplicate(wire, idx)?;
-                commit_funcs.push(Box::new(move || -> Result<(), Box<dyn error::Error>> {
-                    table_c.write().unwrap().duplicate(input)
-                }));
+                commit_funcs.push(self.table.duplicate(input)?);
                 output
             };
         }
@@ -249,10 +241,10 @@ impl Qpack {
                     return Err(DecoderStreamError.into());
                 }
                 let encoder_c = Arc::clone(&self.encoder);
-                let table = Arc::clone(&self.table);
+                let dynamic_table = Arc::clone(&self.table.dynamic_table);
                 commit_funcs.push(Box::new(move || -> Result<(), Box<dyn error::Error>> {
                     let section = encoder_c.write().unwrap().ack_section(stream_id);
-                    table.write().unwrap().ack_section(section);
+                    dynamic_table.write().unwrap().ack_section(section);
                     Ok(())
                 }));
                 len
@@ -266,12 +258,12 @@ impl Qpack {
                 len
             } else { // wire[idx] & Instruction::INSERT_COUNT_INCREMENT == Instruction::INSERT_COUNT_INCREMENT
                 let (len, increment) = Encoder::insert_count_increment(wire, idx)?;
-                if increment == 0 || *self.encoder.read().unwrap().known_sending_count.read().unwrap() < self.table.read().unwrap().dynamic_table.known_received_count + increment {
+                if increment == 0 || *self.encoder.read().unwrap().known_sending_count.read().unwrap() < self.table.dynamic_table.read().unwrap().known_received_count + increment {
                     return Err(DecoderStreamError.into());
                 }
-                let table = Arc::clone(&self.table);
+                let dynamic_table = Arc::clone(&self.table.dynamic_table);
                 commit_funcs.push(Box::new(move || -> Result<(), Box<dyn error::Error>> {
-                    table.write().unwrap().dynamic_table.known_received_count += increment;
+                    dynamic_table.write().unwrap().known_received_count += increment;
                     Ok(())
                 }));
                 len
@@ -285,7 +277,7 @@ impl Qpack {
         }))
     }
     pub fn dump_dynamic_table(&self) {
-        self.table.read().unwrap().dump_dynamic_table();
+        self.table.dump_dynamic_table();
     }
 }
 

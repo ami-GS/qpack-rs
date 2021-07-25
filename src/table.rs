@@ -1,32 +1,26 @@
 use std::error;
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, RwLock};
 
 use crate::dynamic_table::DynamicTable;
 use crate::{DecompressionFailed, Header, StrHeader};
 
 pub struct Table {
-    pub dynamic_table: DynamicTable,
-    static_table: &'static [StrHeader<'static>; 99],
+    pub dynamic_table: Arc<RwLock<DynamicTable>>,
 }
 
 impl Table {
     pub fn new(max_capacity: usize, cv: Arc<(Mutex<usize>, Condvar)>) -> Self {
         Self {
-            dynamic_table: DynamicTable::new(max_capacity, cv),
-            static_table: &STATIC_TABLE,
+            dynamic_table: Arc::new(RwLock::new(DynamicTable::new(max_capacity, cv))),
         }
     }
-    pub fn ack_section(&mut self, section: usize) {
-        self.dynamic_table.ack_section(section);
-    }
-
     // TODO: return (both_matched, on_static_table, idx)
     //       try to remove on_static_table as my HPACK did not use
     pub fn find_index(&self, target: &Header) -> (bool, bool, usize) {
         let not_found_val = (1 << 32) - 1; // TODO: need to set invalid value
 
         let mut static_candidate_idx: usize = not_found_val;
-        for (idx, (name, val)) in self.static_table.iter().enumerate() {
+        for (idx, (name, val)) in STATIC_TABLE.iter().enumerate() {
             if target.0.eq(*name) {
                 if target.1.eq(*val) {
                     // match both
@@ -34,71 +28,79 @@ impl Table {
                 }
                 if static_candidate_idx == not_found_val {
                     static_candidate_idx = idx;
-                } else if self.static_table[static_candidate_idx].0.ne(*name) {
+                } else if STATIC_TABLE[static_candidate_idx].0.ne(*name) {
                     // match name
                     return (false, true, static_candidate_idx);
                 }
             }
         }
 
-        let ret = self.dynamic_table.find_index(target);
+        let ret = self.dynamic_table.read().unwrap().find_index(target);
         if ret.1 == not_found_val && static_candidate_idx != not_found_val {
             return (false, true, static_candidate_idx);
         }
         (ret.0, false, ret.1) // (false, false, (1 << 32 - 1)) means not found
     }
-
     pub fn get_from_static(&self, idx: usize) -> Result<Header, Box<dyn error::Error>> {
         if STATIC_TABLE_SIZE <= idx {
             return Err(DecompressionFailed.into());
         }
-        let header = self.static_table[idx];
-        Ok(Header::from_str_header(header))
+        Ok(Header::from_str_header(STATIC_TABLE[idx]))
     }
-    pub fn get_from_dynamic(&self, idx: usize, post_base: bool) -> Result<Header, Box<dyn error::Error>> {
-        self.dynamic_table.get(idx, post_base, true)
-    }
-    pub fn get_from_dynamic_with_base(&self, base: usize, idx: usize, post_base: bool) -> Result<Header, Box<dyn error::Error>> {
+    pub fn get_from_dynamic(&self, base: usize, idx: usize, post_base: bool) -> Result<Header, Box<dyn error::Error>> {
         let idx = if post_base {
             base + idx
         } else {
             base - idx - 1
         };
-        self.dynamic_table.get(idx, post_base, false)
+        self.dynamic_table.read().unwrap().get(idx, post_base, false)
     }
-    pub fn set_dynamic_table_capacity(&mut self, cap: usize) -> Result<(), Box<dyn error::Error>> {
-        self.dynamic_table.set_capacity(cap)
+    pub fn set_dynamic_table_capacity(&self, capacity: usize)
+        -> Result<Box<dyn FnOnce() -> Result<(), Box<dyn error::Error>>>,
+                    Box<dyn error::Error>> {
+        let dynamic_table = Arc::clone(&self.dynamic_table);
+        Ok(Box::new(move || -> Result<(), Box<dyn error::Error>> {
+            dynamic_table.write().unwrap().set_capacity(capacity)
+        }))
     }
-    pub fn insert_with_name_reference(&mut self, name_idx: usize, value: String, on_static_table: bool) -> Result<(), Box<dyn error::Error>> {
-        let name = if on_static_table {
-            self.static_table[name_idx].0.to_string()
+    pub fn insert_with_name_reference(&self, idx: usize, value: String, on_static: bool)
+        -> Result<Box<dyn FnOnce() -> Result<(), Box<dyn error::Error>>>,
+                    Box<dyn error::Error>> {
+        let name = if on_static {
+            STATIC_TABLE[idx].0.to_string()
         } else {
-            self.get_from_dynamic(name_idx, false)?.0
+            self.dynamic_table.read().unwrap().get(idx, false, true)?.0
         };
-        self.dynamic_table.insert(Header::from_string(name, value))
+        let dynamic_table = Arc::clone(&self.dynamic_table);
+        Ok(Box::new(move || -> Result<(), Box<dyn error::Error>> {
+            dynamic_table.write().unwrap().insert(Header::from_string(name, value))
+        }))
     }
-    pub fn insert_with_literal_name(&mut self, name: String, value: String) -> Result<(), Box<dyn error::Error>> {
-        self.dynamic_table.insert(Header::from_string(name, value))
+    pub fn insert_with_literal_name(&self, name: String, value: String)
+        -> Result<Box<dyn FnOnce() -> Result<(), Box<dyn error::Error>>>,
+                    Box<dyn error::Error>> {
+        let dynamic_table = Arc::clone(&self.dynamic_table);
+        Ok(Box::new(move || -> Result<(), Box<dyn error::Error>> {
+            dynamic_table.write().unwrap().insert(Header::from_string(name, value))
+        }))
     }
-    pub fn duplicate(&mut self, index: usize) -> Result<(), Box<dyn error::Error>> {
-        // TODO: really?
-        //       abs = insert count - index - 1;
-        //       base is treated as insert count
-        //       the +1 comes from that the "insert count" might include currently comming insert
-        let header = self.get_from_dynamic(index, false)?;
-        self.insert_with_literal_name(header.0, header.1)
-    }
-    pub fn insert(&mut self, header: Header) -> Result<(), Box<dyn error::Error>> {
-        self.dynamic_table.insert(header)
+    pub fn duplicate(&self, idx: usize)
+        -> Result<Box<dyn FnOnce() -> Result<(), Box<dyn error::Error>>>,
+                    Box<dyn error::Error>> {
+        let header = self.dynamic_table.read().unwrap().get(idx, false, true)?;
+        let dynamic_table = Arc::clone(&self.dynamic_table);
+        Ok(Box::new(move || -> Result<(), Box<dyn error::Error>> {
+            dynamic_table.write().unwrap().insert(header)
+        }))
     }
     pub fn get_max_entries(&self) -> u32 {
-        (self.dynamic_table.max_capacity as f64 / 32 as f64).floor() as u32
+        (self.dynamic_table.read().unwrap().max_capacity as f64 / 32 as f64).floor() as u32
     }
     pub fn get_insert_count(&self) -> usize {
-        self.dynamic_table.get_insert_count()
+        self.dynamic_table.read().unwrap().get_insert_count()
     }
     pub fn dump_dynamic_table(&self) {
-        self.dynamic_table.dump_entries();
+        self.dynamic_table.read().unwrap().dump_entries();
     }
 }
 
