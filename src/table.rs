@@ -1,4 +1,5 @@
 use std::error;
+use std::sync::{Arc, Condvar, Mutex};
 
 use crate::dynamic_table::DynamicTable;
 use crate::{DecompressionFailed, Header, StrHeader};
@@ -9,9 +10,9 @@ pub struct Table {
 }
 
 impl Table {
-    pub fn new(max_capacity: usize) -> Self {
+    pub fn new(max_capacity: usize, cv: Arc<(Mutex<usize>, Condvar)>) -> Self {
         Self {
-            dynamic_table: DynamicTable::new(max_capacity),
+            dynamic_table: DynamicTable::new(max_capacity, cv),
             static_table: &STATIC_TABLE,
         }
     }
@@ -68,7 +69,8 @@ impl Table {
         let name = if on_static_table {
             self.static_table[name_idx].0.to_string()
         } else {
-            self.get_from_dynamic(self.dynamic_table.insert_count, name_idx, false)?.0
+            // TODO: remove get_insert_count as it is called in dynamic_table.get()
+            self.get_from_dynamic(self.dynamic_table.get_insert_count(), name_idx, false)?.0
         };
         self.dynamic_table.insert(Header::from_string(name, value))
     }
@@ -80,7 +82,7 @@ impl Table {
         //       abs = insert count - index - 1;
         //       base is treated as insert count
         //       the +1 comes from that the "insert count" might include currently comming insert
-        let header = self.get_from_dynamic(self.dynamic_table.insert_count, index, false)?;
+        let header = self.get_from_dynamic(self.get_insert_count(), index, false)?;
         self.insert_with_literal_name(header.0, header.1)
     }
     pub fn insert(&mut self, header: Header) -> Result<(), Box<dyn error::Error>> {
@@ -90,7 +92,7 @@ impl Table {
         (self.dynamic_table.max_capacity as f64 / 32 as f64).floor() as u32
     }
     pub fn get_insert_count(&self) -> usize {
-        self.dynamic_table.insert_count
+        self.dynamic_table.get_insert_count()
     }
     pub fn dump_dynamic_table(&self) {
         self.dynamic_table.dump_entries();

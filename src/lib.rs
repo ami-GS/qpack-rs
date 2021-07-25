@@ -3,7 +3,7 @@ use crate::encoder::Encoder;
 use crate::table::Table;
 use core::fmt;
 use std::error;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Condvar, Mutex, RwLock};
 
 mod decoder;
 mod dynamic_table;
@@ -14,14 +14,19 @@ pub struct Qpack {
     encoder: Arc<RwLock<Encoder>>,
     decoder: Arc<RwLock<Decoder>>,
     table: Arc<RwLock<Table>>,
+    blocked_streams_limit: u16,
+    cv: Arc<(Mutex<usize>, Condvar)>,
 }
 
 impl Qpack {
-    pub fn new(dynamic_table_max_capacity: usize) -> Self {
+    pub fn new(blocked_streams_limit: u16, dynamic_table_max_capacity: usize) -> Self {
+        let cv = Arc::new((Mutex::new(0), Condvar::new()));
         Qpack {
             encoder: Arc::new(RwLock::new(Encoder::new())),
             decoder: Arc::new(RwLock::new(Decoder::new())),
-            table: Arc::new(RwLock::new(Table::new(dynamic_table_max_capacity))),
+            table: Arc::new(RwLock::new(Table::new(dynamic_table_max_capacity, Arc::clone(&cv)))),
+            blocked_streams_limit,
+            cv,
         }
     }
     pub fn encode_insert_headers(&self, encoded: &mut Vec<u8>, headers: Vec<Header>)
@@ -108,7 +113,7 @@ impl Qpack {
         let base = if relative_indexing {
             0
         } else {
-            self.table.read().unwrap().dynamic_table.insert_count as u32
+            self.table.read().unwrap().get_insert_count() as u32
         };
         let encoder = self.encoder.read().unwrap();
         encoder.prefix(encoded, &self.table.read().unwrap(), required_insert_count as u32, relative_indexing, base);
@@ -148,7 +153,20 @@ impl Qpack {
         idx += len;
 
         // blocked if dynamic_table.insert_count < requred_insert_count
-        // blocked just before referencing dynamic_table is better?
+        // OPTIMIZE: blocked just before referencing dynamic_table is better?
+        let insert_count = self.table.read().unwrap().get_insert_count();
+        if insert_count < requred_insert_count as usize {
+            if self.blocked_streams_limit == self.decoder.read().unwrap().current_blocked_streams + 1 {
+                return Err(DecompressionFailed.into());
+            }
+            self.decoder.write().unwrap().current_blocked_streams += 1;
+
+            let (mux, cv) = &*self.cv;
+            let mut locked_insert_count = mux.lock().unwrap();
+            while *locked_insert_count < requred_insert_count as usize {
+                locked_insert_count = cv.wait(locked_insert_count).unwrap();
+            }
+        }
 
         let mut headers = vec![];
         let wire_len = wire.len();
@@ -410,7 +428,7 @@ mod tests {
     static STREAM_ID: u16 = 4;
 	#[test]
 	fn rfc_appendix_b1_encode() {
-		let qpack = Qpack::new(1024);
+		let qpack = Qpack::new(1, 1024);
 		let headers = vec![Header::from(":path", "/index.html")];
 		let mut encoded = vec![];
 		let commit_func = qpack.encode_headers(&mut encoded, false, headers, STREAM_ID);
@@ -423,7 +441,7 @@ mod tests {
 	}
 	#[test]
 	fn rfc_appendix_b1_decode() {
-		let qpack = Qpack::new(1024);
+		let qpack = Qpack::new(1, 1024);
 		let wire = vec![0x00, 0x00, 0x51, 0x0b, 0x2f,
 								0x69, 0x6e, 0x64, 0x65, 0x78,
 								0x2e, 0x68, 0x74, 0x6d, 0x6c];
@@ -434,7 +452,7 @@ mod tests {
 
 	#[test]
 	fn encode_indexed_simple() {
-		let qpack = Qpack::new(1024);
+		let qpack = Qpack::new(1, 1024);
 		let headers = vec![Header::from(":path", "/")];
         let mut encoded = vec![];
 		let commit_func = qpack.encode_headers(&mut encoded, false, headers, STREAM_ID);
@@ -445,7 +463,7 @@ mod tests {
 	}
 	#[test]
 	fn decode_indexed_simple() {
-		let qpack = Qpack::new(1024);
+		let qpack = Qpack::new(1, 1024);
 		let wire = vec![0x00, 0x00, 0xc1];
 		let out = qpack.decode_headers(&wire, STREAM_ID).unwrap();
 		assert_eq!(out.0,
@@ -454,15 +472,15 @@ mod tests {
 	}
     #[test]
     fn encode_set_dynamic_table_capacity() {
-        let qpack = Qpack::new(1024);
+        let qpack = Qpack::new(1, 1024);
         let mut encoded = vec![];
         let _ = qpack.encode_set_dynamic_table_capacity(&mut encoded, 220);
         assert_eq!(encoded, vec![0x3f, 0xbd, 0x01]);
     }
     #[test]
     fn multi_threading() {
-        let qpack_encoder = Qpack::new(1024);
-        let qpack_decoder = Qpack::new(1024);
+        let qpack_encoder = Qpack::new(2, 1024);
+        let qpack_decoder = Qpack::new(2, 1024);
         let safe_encoder = Arc::new(RwLock::new(qpack_encoder));
         let safe_decoder = Arc::new(RwLock::new(qpack_decoder));
 
@@ -503,8 +521,8 @@ mod tests {
     }
     #[test]
     fn encode_insert_with_name_reference() {
-        let qpack_encoder = Qpack::new(1024);
-        let qpack_decoder = Qpack::new(1024);
+        let qpack_encoder = Qpack::new(1, 1024);
+        let qpack_decoder = Qpack::new(1, 1024);
 
         println!("Step 1");
         {   // encoder instruction

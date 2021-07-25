@@ -11,6 +11,7 @@ impl Instruction {
 
 pub struct Decoder {
     _size: usize,
+    pub current_blocked_streams: u16,
     pub pending_sections: HashMap<u16, usize>, // experimental
 }
 
@@ -18,6 +19,7 @@ impl Decoder {
     pub fn new() -> Self {
         Self {
             _size: 0,
+            current_blocked_streams: 0,
             pending_sections: HashMap::new(),
         }
     }
