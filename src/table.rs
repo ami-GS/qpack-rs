@@ -55,12 +55,16 @@ impl Table {
         let header = self.static_table[idx];
         Ok(Header::from_str_header(header))
     }
-    pub fn get_from_dynamic(&self, base: usize, idx: usize, post_base: bool) -> Result<Header, Box<dyn error::Error>> {
-        if post_base {
-            self.dynamic_table.get(base + idx)
+    pub fn get_from_dynamic(&self, idx: usize, post_base: bool) -> Result<Header, Box<dyn error::Error>> {
+        self.dynamic_table.get(idx, post_base, true)
+    }
+    pub fn get_from_dynamic_with_base(&self, base: usize, idx: usize, post_base: bool) -> Result<Header, Box<dyn error::Error>> {
+        let idx = if post_base {
+            base + idx
         } else {
-            self.dynamic_table.get(base - idx - 1)
-        }
+            base - idx - 1
+        };
+        self.dynamic_table.get(idx, post_base, false)
     }
     pub fn set_dynamic_table_capacity(&mut self, cap: usize) -> Result<(), Box<dyn error::Error>> {
         self.dynamic_table.set_capacity(cap)
@@ -69,8 +73,7 @@ impl Table {
         let name = if on_static_table {
             self.static_table[name_idx].0.to_string()
         } else {
-            // TODO: remove get_insert_count as it is called in dynamic_table.get()
-            self.get_from_dynamic(self.dynamic_table.get_insert_count(), name_idx, false)?.0
+            self.get_from_dynamic(name_idx, false)?.0
         };
         self.dynamic_table.insert(Header::from_string(name, value))
     }
@@ -82,7 +85,7 @@ impl Table {
         //       abs = insert count - index - 1;
         //       base is treated as insert count
         //       the +1 comes from that the "insert count" might include currently comming insert
-        let header = self.get_from_dynamic(self.get_insert_count(), index, false)?;
+        let header = self.get_from_dynamic(index, false)?;
         self.insert_with_literal_name(header.0, header.1)
     }
     pub fn insert(&mut self, header: Header) -> Result<(), Box<dyn error::Error>> {

@@ -133,7 +133,7 @@ impl Decoder {
             if from_static {
                 (table.get_from_static(table_idx as usize)?, false)
             } else {
-                (table.get_from_dynamic(base, table_idx as usize, false)?, true)
+                (table.get_from_dynamic_with_base(base, table_idx as usize, false)?, true)
             }
         )
     }
@@ -146,7 +146,7 @@ impl Decoder {
         let header = if from_static {
             table.get_from_static(table_idx as usize)?
         } else {
-            table.get_from_dynamic(base, table_idx as usize, false)?
+            table.get_from_dynamic_with_base(base, table_idx as usize, false)?
         };
         let (len, value_length) = Qnum::decode(wire, *idx, 7);
         *idx += len;
@@ -177,14 +177,14 @@ impl Decoder {
     pub fn indexed_post_base_index(&self, wire: &Vec<u8>, idx: &mut usize, base: usize, table: &Table) -> Result<(Header, bool), Box<dyn error::Error>> {
         let (len, table_idx) = Qnum::decode(wire, *idx, 4);
         *idx += len;
-        let header = table.get_from_dynamic(base, table_idx as usize, true)?;
+        let header = table.get_from_dynamic_with_base(base, table_idx as usize, true)?;
         Ok((header, true))
     }
 
     pub fn literal_post_base_name_reference(&self, wire: &Vec<u8>, idx: &mut usize, base: usize, table: &Table) -> Result<(Header, bool), Box<dyn error::Error>> {
         let (len, table_idx) = Qnum::decode(wire, *idx, 3);
         *idx += len;
-        let header = table.get_from_dynamic(base, table_idx as usize, true)?;
+        let header = table.get_from_dynamic_with_base(base, table_idx as usize, true)?;
         let (len, value_length) = Qnum::decode(wire, *idx, 7);
         *idx += len;
         let value = std::str::from_utf8(

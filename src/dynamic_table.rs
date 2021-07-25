@@ -115,15 +115,23 @@ impl DynamicTable {
 
         self.increment_insert_count();
 
-        // condition variable? notify all?
         self.current_size += size;
         Ok(())
     }
-    pub fn get(&self, idx: usize) -> Result<Header, Box<dyn error::Error>> {
+    pub fn get(&self, relative_idx: usize, post_base: bool, calc_idx: bool) -> Result<Header, Box<dyn error::Error>> {
         let insert_count = self.get_insert_count();
+        let abs_idx = if calc_idx {
+            if post_base {
+                insert_count + relative_idx
+            } else {
+                insert_count - relative_idx - 1
+            }
+        } else {
+            relative_idx
+        };
         let mut i = insert_count;
         for entry in self.list.iter() {
-            if idx == i-1 {
+            if abs_idx == i-1 {
                 return Ok(Header::from(&entry.header.0, &entry.header.1));
             }
             i -= 1;
