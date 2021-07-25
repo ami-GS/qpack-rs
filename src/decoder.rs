@@ -24,11 +24,11 @@ impl Decoder {
         }
     }
     // Decode Encoder instructions
-    pub fn dynamic_table_capacity(&self, wire: &Vec<u8>, idx: usize) -> Result<(usize, usize), Box<dyn error::Error>> {
+    pub fn dynamic_table_capacity(wire: &Vec<u8>, idx: usize) -> Result<(usize, usize), Box<dyn error::Error>> {
         let (len1, cap) = Qnum::decode(wire, idx, 5);
         Ok((len1, cap as usize))
     }
-    pub fn insert_with_name_reference(&self, wire: &Vec<u8>, idx: usize) -> Result<(usize, (usize, String, bool)), Box<dyn error::Error>> {
+    pub fn insert_with_name_reference(wire: &Vec<u8>, idx: usize) -> Result<(usize, (usize, String, bool)), Box<dyn error::Error>> {
         let on_static_table = wire[idx] & 0b01000000 == 0b01000000;
         let (len1, name_idx) = Qnum::decode(wire, idx, 6);
         let (len2, value_len) = Qnum::decode(wire, idx + len1, 7);
@@ -38,7 +38,7 @@ impl Decoder {
         // TODO: check "H" bit
         Ok((len1 + len2 + value_len as usize, (name_idx as usize, value.to_string(), on_static_table)))
     }
-    pub fn insert_with_literal_name(&self, wire: &Vec<u8>, idx: usize) -> Result<(usize, (String, String)), Box<dyn error::Error>> {
+    pub fn insert_with_literal_name(wire: &Vec<u8>, idx: usize) -> Result<(usize, (String, String)), Box<dyn error::Error>> {
         // TODO: check "H" bits
         let (len1, name_len) = Qnum::decode(wire, idx, 5);
         let name = std::str::from_utf8(&wire[(idx + len1)..(idx + len1 + name_len as usize)])?;
@@ -49,7 +49,7 @@ impl Decoder {
         )?;
         Ok((len1 + len2 + name_len as usize + value_len as usize, (name.to_string(), value.to_string())))
     }
-    pub fn duplicate(&self, wire: &Vec<u8>, idx: usize) -> Result<(usize, usize), Box<dyn error::Error>> {
+    pub fn duplicate(wire: &Vec<u8>, idx: usize) -> Result<(usize, usize), Box<dyn error::Error>> {
         let (len, index) = Qnum::decode(wire, idx, 5);
         Ok((len, index as usize))
     }
@@ -66,26 +66,26 @@ impl Decoder {
         self.pending_sections.remove(&stream_id);
     }
     // Encode Decoder instructions
-    pub fn section_ackowledgment(&self, encoded: &mut Vec<u8>, stream_id: u16) -> Result<(), Box<dyn error::Error>> {
+    pub fn section_ackowledgment(encoded: &mut Vec<u8>, stream_id: u16) -> Result<(), Box<dyn error::Error>> {
         // TODO: double check streamID's max length
         let len = Qnum::encode(encoded, stream_id as u32, 7);
         let wire_len = encoded.len();
         encoded[wire_len - len] |= Instruction::SECTION_ACKNOWLEDGMENT;
         Ok(())
     }
-    pub fn stream_cancellation(&self, encoded: &mut Vec<u8>, stream_id: u16) -> Result<(), Box<dyn error::Error>> {
+    pub fn stream_cancellation(encoded: &mut Vec<u8>, stream_id: u16) -> Result<(), Box<dyn error::Error>> {
         // TODO: double check streamID's max length
         let len = Qnum::encode(encoded, stream_id as u32, 6);
         let wire_len = encoded.len();
         encoded[wire_len - len] |= Instruction::STREAM_CANCELLATION;
         Ok(())
     }
-    pub fn insert_count_increment(&self, encoded: &mut Vec<u8>, increment: usize) -> Result<(), Box<dyn error::Error>> {
+    pub fn insert_count_increment(encoded: &mut Vec<u8>, increment: usize) -> Result<(), Box<dyn error::Error>> {
         let _ = Qnum::encode(encoded, increment as u32, 6);
         Ok(())
     }
 
-    pub fn prefix(&self, wire: &Vec<u8>, idx: usize, table: &Table) -> Result<(usize, u32, usize), Box<dyn error::Error>> {
+    pub fn prefix(wire: &Vec<u8>, idx: usize, table: &Table) -> Result<(usize, u32, usize), Box<dyn error::Error>> {
         let (len1, encoded_insert_count) = Qnum::decode(wire, idx, 8);
 
         // # 4.5.1.1
@@ -124,7 +124,7 @@ impl Decoder {
         Ok((len1 + len2, required_insert_count, base as usize))
     }
 
-    pub fn indexed(&self, wire: &Vec<u8>, idx: &mut usize, base: usize, table: &Table) -> Result<(Header, bool), Box<dyn error::Error>> {
+    pub fn indexed(wire: &Vec<u8>, idx: &mut usize, base: usize, table: &Table) -> Result<(Header, bool), Box<dyn error::Error>> {
         let from_static = wire[*idx] & 0b01000000 == 0b01000000;
         let (len, table_idx) = Qnum::decode(wire, *idx, 6);
         *idx += len;
@@ -138,7 +138,7 @@ impl Decoder {
         )
     }
 
-    pub fn literal_name_reference(&self, wire: &Vec<u8>, idx: &mut usize, base: usize, table: &Table) -> Result<(Header, bool), Box<dyn error::Error>> {
+    pub fn literal_name_reference(wire: &Vec<u8>, idx: &mut usize, base: usize, table: &Table) -> Result<(Header, bool), Box<dyn error::Error>> {
         let (len, table_idx) = Qnum::decode(wire, *idx, 4);
         let from_static = wire[*idx] & 0b00010000 == 0b00010000;
         *idx += len;
@@ -158,7 +158,7 @@ impl Decoder {
         Ok((Header::from_string(header.0, value.to_string()), !from_static))
     }
 
-    pub fn literal_literal_name(&self, wire: &Vec<u8>, idx: &mut usize) -> Result<(Header, bool), Box<dyn error::Error>> {
+    pub fn literal_literal_name(wire: &Vec<u8>, idx: &mut usize) -> Result<(Header, bool), Box<dyn error::Error>> {
         let (len, name_length) = Qnum::decode(wire, *idx, 3);
         *idx += len;
         let name = std::str::from_utf8(
@@ -174,14 +174,14 @@ impl Decoder {
         Ok((Header::from(name, value), false))
     }
 
-    pub fn indexed_post_base_index(&self, wire: &Vec<u8>, idx: &mut usize, base: usize, table: &Table) -> Result<(Header, bool), Box<dyn error::Error>> {
+    pub fn indexed_post_base_index(wire: &Vec<u8>, idx: &mut usize, base: usize, table: &Table) -> Result<(Header, bool), Box<dyn error::Error>> {
         let (len, table_idx) = Qnum::decode(wire, *idx, 4);
         *idx += len;
         let header = table.get_from_dynamic_with_base(base, table_idx as usize, true)?;
         Ok((header, true))
     }
 
-    pub fn literal_post_base_name_reference(&self, wire: &Vec<u8>, idx: &mut usize, base: usize, table: &Table) -> Result<(Header, bool), Box<dyn error::Error>> {
+    pub fn literal_post_base_name_reference(wire: &Vec<u8>, idx: &mut usize, base: usize, table: &Table) -> Result<(Header, bool), Box<dyn error::Error>> {
         let (len, table_idx) = Qnum::decode(wire, *idx, 3);
         *idx += len;
         let header = table.get_from_dynamic_with_base(base, table_idx as usize, true)?;

@@ -45,13 +45,13 @@ impl Encoder {
     }
     // Encode Encoder instructions
     // WARN: confusing name
-    pub fn set_dynamic_table_capacity(&self, encoded: &mut Vec<u8>, cap: usize) -> Result<(), Box<dyn error::Error>> {
+    pub fn set_dynamic_table_capacity(encoded: &mut Vec<u8>, cap: usize) -> Result<(), Box<dyn error::Error>> {
         let len = Qnum::encode(encoded, cap as u32, 5);
         let wire_len = encoded.len();
         encoded[wire_len - len] |= Instruction::SET_DYNAMIC_TABLE_CAPACITY;
         Ok(())
     }
-    pub fn insert_with_name_reference(&self, encoded: &mut Vec<u8>, on_static: bool, name_idx: usize, value: &str) -> Result<(), Box<dyn error::Error>> {
+    pub fn insert_with_name_reference(encoded: &mut Vec<u8>, on_static: bool, name_idx: usize, value: &str) -> Result<(), Box<dyn error::Error>> {
         let len = Qnum::encode(encoded, name_idx as u32, 6);
         let wire_len = encoded.len();
         if on_static { // "T" bit
@@ -63,7 +63,7 @@ impl Encoder {
         encoded.append(&mut value.as_bytes().to_vec());
         Ok(())
     }
-    pub fn insert_with_literal_name(&self, encoded: &mut Vec<u8>, name: &str, value: &str) -> Result<(), Box<dyn error::Error>> {
+    pub fn insert_with_literal_name(encoded: &mut Vec<u8>, name: &str, value: &str) -> Result<(), Box<dyn error::Error>> {
         let len = Qnum::encode(encoded, name.len() as u32, 5);
         let wire_len = encoded.len();
         encoded[wire_len - len] |= Instruction::INSERT_WITH_LITERAL_NAME;
@@ -72,7 +72,7 @@ impl Encoder {
         encoded.append(&mut value.as_bytes().to_vec());
         Ok(())
     }
-    pub fn duplicate(&self, encoded: &mut Vec<u8>, idx: usize) -> Result<(), Box<dyn error::Error>> {
+    pub fn duplicate(encoded: &mut Vec<u8>, idx: usize) -> Result<(), Box<dyn error::Error>> {
         let len  = Qnum::encode(encoded, idx as u32, 5);
         let wire_len = encoded.len();
         encoded[wire_len - len] |= Instruction::DUPLICATE;
@@ -80,20 +80,20 @@ impl Encoder {
     }
 
     // Decode Decoder instructions
-    pub fn section_ackowledgment(&self, wire: &Vec<u8>, idx: usize) -> Result<(usize, u16), Box<dyn error::Error>> {
+    pub fn section_ackowledgment(wire: &Vec<u8>, idx: usize) -> Result<(usize, u16), Box<dyn error::Error>> {
         let (len, stream_id) = Qnum::decode(wire, idx, 7);
         Ok((len, stream_id as u16))
     }
-    pub fn stream_cancellation(&self, wire: &Vec<u8>, idx: usize) -> Result<(usize, u16), Box<dyn error::Error>> {
+    pub fn stream_cancellation(wire: &Vec<u8>, idx: usize) -> Result<(usize, u16), Box<dyn error::Error>> {
         let (len, stream_id) = Qnum::decode(wire, idx, 6);
         Ok((len, stream_id as u16))
     }
-    pub fn insert_count_increment(&self, wire: &Vec<u8>, idx: usize) -> Result<(usize, usize), Box<dyn error::Error>> {
+    pub fn insert_count_increment(wire: &Vec<u8>, idx: usize) -> Result<(usize, usize), Box<dyn error::Error>> {
         let (len, increment) = Qnum::decode(wire, idx, 6);
         Ok((len, increment as usize))
     }
 
-    pub fn prefix(&self, encoded: &mut Vec<u8>, table: &Table, required_insert_count: u32, s_flag: bool, base: u32) {
+    pub fn prefix(encoded: &mut Vec<u8>, table: &Table, required_insert_count: u32, s_flag: bool, base: u32) {
         let encoded_insert_count = if required_insert_count == 0 {
             required_insert_count
         } else {
@@ -118,7 +118,7 @@ impl Encoder {
         }
     }
 
-    pub fn indexed(&self, encoded: &mut Vec<u8>, idx: u32, from_static: bool) {
+    pub fn indexed(encoded: &mut Vec<u8>, idx: u32, from_static: bool) {
         let len = Qnum::encode(encoded, idx, 6);
         let wire_len = encoded.len();
         encoded[wire_len - len] |= FieldType::INDEXED;
@@ -127,13 +127,12 @@ impl Encoder {
             encoded[wire_len - len] |= 0b01000000;
         }
     }
-    pub fn indexed_post_base_index(&self, encoded: &mut Vec<u8>, idx: u32) {
+    pub fn indexed_post_base_index(encoded: &mut Vec<u8>, idx: u32) {
         let len = Qnum::encode(encoded, idx, 4);
         let wire_len = encoded.len();
         encoded[wire_len - len] |= FieldType::INDEXED_POST_BASE_INDEX;
     }
     pub fn literal_name_reference(
-        &self,
         encoded: &mut Vec<u8>,
         idx: u32,
         value: &str,
@@ -151,7 +150,7 @@ impl Encoder {
         let _ = Qnum::encode(encoded, value.len() as u32, 7);
         encoded.append(&mut value.as_bytes().to_vec());
     }
-    pub fn literal_post_base_name_reference(&self, encoded: &mut Vec<u8>, idx: u32, value: &str) {
+    pub fn literal_post_base_name_reference(encoded: &mut Vec<u8>, idx: u32, value: &str) {
         // TODO: "N" bit?
         let len = Qnum::encode(encoded, idx, 3);
         let wire_len = encoded.len();
@@ -160,7 +159,7 @@ impl Encoder {
         let _ = Qnum::encode(encoded, value.len() as u32, 7);
         encoded.append(&mut value.as_bytes().to_vec());
     }
-    pub fn literal_literal_name(&self, encoded: &mut Vec<u8>, header: &Header) {
+    pub fn literal_literal_name(encoded: &mut Vec<u8>, header: &Header) {
         // TODO: "N", "H" bit?
         let len = Qnum::encode(encoded, header.0.len() as u32, 3);
         let wire_len  = encoded.len();
