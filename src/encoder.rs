@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::error;
 use std::sync::{Arc, RwLock};
 
-use crate::huffman::HuffmanTransformer;
+use crate::huffman::HUFFMAN_TRANSFORMER;
 use crate::{table::Table, Header};
 use crate::{FieldType, Qnum};
 
@@ -52,12 +52,12 @@ impl Encoder {
         encoded[wire_len - len] |= Instruction::SET_DYNAMIC_TABLE_CAPACITY;
         Ok(())
     }
-    fn pack_string(encoded: &mut Vec<u8>, value: &str, n: u8, huffman_transformer: Option<&HuffmanTransformer>) -> Result<usize, Box<dyn error::Error>> {
+    fn pack_string(encoded: &mut Vec<u8>, value: &str, n: u8, use_huffman: bool) -> Result<usize, Box<dyn error::Error>> {
         Ok(
-            if let Some(transformer) = huffman_transformer {
+            if use_huffman {
                 // TODO: optimize
                 let mut encoded2 = vec![];
-                transformer.encode(&mut encoded2, value)?;
+                HUFFMAN_TRANSFORMER.encode(&mut encoded2, value)?;
                 let len = Qnum::encode(encoded, encoded2.len() as u32, n);
                 let wire_len = encoded.len();
                 encoded[wire_len - len] |= 1 << n;
@@ -70,7 +70,7 @@ impl Encoder {
             }
         )
     }
-    pub fn insert_with_name_reference(encoded: &mut Vec<u8>, on_static: bool, name_idx: usize, value: &str, huffman_transformer: Option<&HuffmanTransformer>) -> Result<(), Box<dyn error::Error>> {
+    pub fn insert_with_name_reference(encoded: &mut Vec<u8>, on_static: bool, name_idx: usize, value: &str, use_huffman: bool) -> Result<(), Box<dyn error::Error>> {
         let len = Qnum::encode(encoded, name_idx as u32, 6);
         let wire_len = encoded.len();
         if on_static { // "T" bit
@@ -78,14 +78,14 @@ impl Encoder {
         }
         encoded[wire_len - len] |= Instruction::INSERT_WITH_NAME_REFERENCE;
 
-        Encoder::pack_string(encoded, value, 7, huffman_transformer)?;
+        Encoder::pack_string(encoded, value, 7, use_huffman)?;
         Ok(())
     }
-    pub fn insert_with_literal_name(encoded: &mut Vec<u8>, name: &str, value: &str, huffman_transformer: Option<&HuffmanTransformer>) -> Result<(), Box<dyn error::Error>> {
-        let len = Encoder::pack_string(encoded, name, 5, huffman_transformer)?;
+    pub fn insert_with_literal_name(encoded: &mut Vec<u8>, name: &str, value: &str, use_huffman: bool) -> Result<(), Box<dyn error::Error>> {
+        let len = Encoder::pack_string(encoded, name, 5, use_huffman)?;
         let wire_len = encoded.len();
         encoded[wire_len - len] |= Instruction::INSERT_WITH_LITERAL_NAME;
-        Encoder::pack_string(encoded, value, 7, huffman_transformer)?;
+        Encoder::pack_string(encoded, value, 7, use_huffman)?;
         Ok(())
     }
     pub fn duplicate(encoded: &mut Vec<u8>, idx: usize) -> Result<(), Box<dyn error::Error>> {
@@ -153,7 +153,7 @@ impl Encoder {
         idx: u32,
         value: &str,
         from_static: bool,
-        huffman_transformer: Option<&HuffmanTransformer>
+        use_huffman: bool
     ) {
         // TODO: "N" bit?
         let len = Qnum::encode(encoded, idx, 4);
@@ -164,20 +164,20 @@ impl Encoder {
             encoded[wire_len - len] |= 0b00010000;
         }
         // TODO: error handling
-        Encoder::pack_string(encoded, value, 7, huffman_transformer);
+        Encoder::pack_string(encoded, value, 7, use_huffman);
     }
-    pub fn literal_post_base_name_reference(encoded: &mut Vec<u8>, idx: u32, value: &str, huffman_transformer: Option<&HuffmanTransformer>) {
+    pub fn literal_post_base_name_reference(encoded: &mut Vec<u8>, idx: u32, value: &str, use_huffman: bool) {
         // TODO: "N" bit?
         let len = Qnum::encode(encoded, idx, 3);
         let wire_len = encoded.len();
         encoded[wire_len - len] |= FieldType::LITERAL_POST_BASE_NAME_REFERENCE;
-        Encoder::pack_string(encoded, value, 7, huffman_transformer);
+        Encoder::pack_string(encoded, value, 7, use_huffman);
     }
-    pub fn literal_literal_name(encoded: &mut Vec<u8>, header: &Header, huffman_transformer: Option<&HuffmanTransformer>) {
+    pub fn literal_literal_name(encoded: &mut Vec<u8>, header: &Header, use_huffman: bool) {
         // TODO: "N"?
-        let len = Encoder::pack_string(encoded, &header.0, 3, huffman_transformer).unwrap();
+        let len = Encoder::pack_string(encoded, &header.0, 3, use_huffman).unwrap();
         let wire_len  = encoded.len();
         encoded[wire_len - len] |= FieldType::LITERAL_LITERAL_NAME;
-        Encoder::pack_string(encoded, &header.1, 7, huffman_transformer);
+        Encoder::pack_string(encoded, &header.1, 7, use_huffman);
     }
 }

@@ -1,6 +1,7 @@
 use std::{collections::HashMap, error};
 
-use crate::{DecompressionFailed, Header, Qnum, table::Table, huffman::HuffmanTransformer};
+use crate::{DecompressionFailed, Header, Qnum, table::Table};
+use crate::huffman::HUFFMAN_TRANSFORMER;
 
 pub struct Instruction;
 impl Instruction {
@@ -23,11 +24,11 @@ impl Decoder {
             pending_sections: HashMap::new(),
         }
     }
-    fn parse_string(wire: &Vec<u8>, idx: usize, n: u8, huffman_transformer: &HuffmanTransformer) -> Result<(usize, String), Box<dyn error::Error>> {
+    fn parse_string(wire: &Vec<u8>, idx: usize, n: u8) -> Result<(usize, String), Box<dyn error::Error>> {
         let (len, value_len) = Qnum::decode(wire, idx, n);
         Ok((len + value_len as usize,
         if wire[idx] & (1 << n) > 0 {
-            huffman_transformer.decode(wire, idx + len, value_len as usize)?
+            HUFFMAN_TRANSFORMER.decode(wire, idx + len, value_len as usize)?
         } else {
             std::str::from_utf8(
                 &wire[(idx + len)..(idx + len + value_len as usize)],
@@ -39,15 +40,15 @@ impl Decoder {
         let (len1, cap) = Qnum::decode(wire, idx, 5);
         Ok((len1, cap as usize))
     }
-    pub fn insert_with_name_reference(wire: &Vec<u8>, idx: usize, huffman_transformer: &HuffmanTransformer) -> Result<(usize, (usize, String, bool)), Box<dyn error::Error>> {
+    pub fn insert_with_name_reference(wire: &Vec<u8>, idx: usize) -> Result<(usize, (usize, String, bool)), Box<dyn error::Error>> {
         let on_static_table = wire[idx] & 0b01000000 == 0b01000000;
         let (len1, name_idx) = Qnum::decode(wire, idx, 6);
-        let (len2, value) = Decoder::parse_string(wire, idx + len1, 6, huffman_transformer)?;
+        let (len2, value) = Decoder::parse_string(wire, idx + len1, 6)?;
         Ok((len1 + len2, (name_idx as usize, value.to_string(), on_static_table)))
     }
-    pub fn insert_with_literal_name(wire: &Vec<u8>, idx: usize, huffman_transformer: &HuffmanTransformer) -> Result<(usize, (String, String)), Box<dyn error::Error>> {
-        let (len1, name) = Decoder::parse_string(wire, idx, 5, huffman_transformer)?;
-        let (len2, value) = Decoder::parse_string(wire, idx + len1, 7, huffman_transformer)?;
+    pub fn insert_with_literal_name(wire: &Vec<u8>, idx: usize) -> Result<(usize, (String, String)), Box<dyn error::Error>> {
+        let (len1, name) = Decoder::parse_string(wire, idx, 5)?;
+        let (len2, value) = Decoder::parse_string(wire, idx + len1, 7)?;
         Ok((len1 + len2, (name, value)))
     }
     pub fn duplicate(wire: &Vec<u8>, idx: usize) -> Result<(usize, usize), Box<dyn error::Error>> {
@@ -139,7 +140,7 @@ impl Decoder {
         )
     }
 
-    pub fn literal_name_reference(wire: &Vec<u8>, idx: &mut usize, base: usize, table: &Table, huffman_transformer: &HuffmanTransformer) -> Result<(Header, bool), Box<dyn error::Error>> {
+    pub fn literal_name_reference(wire: &Vec<u8>, idx: &mut usize, base: usize, table: &Table) -> Result<(Header, bool), Box<dyn error::Error>> {
         let (len, table_idx) = Qnum::decode(wire, *idx, 4);
         let from_static = wire[*idx] & 0b00010000 == 0b00010000;
         *idx += len;
@@ -149,16 +150,16 @@ impl Decoder {
         } else {
             table.get_from_dynamic(base, table_idx as usize, false)?
         };
-        let (len, value) = Decoder::parse_string(wire, *idx, 7, huffman_transformer)?;
+        let (len, value) = Decoder::parse_string(wire, *idx, 7)?;
         *idx += len;
 
         Ok((Header::from_string(header.0, value), !from_static))
     }
 
-    pub fn literal_literal_name(wire: &Vec<u8>, idx: &mut usize, huffman_transformer: &HuffmanTransformer) -> Result<(Header, bool), Box<dyn error::Error>> {
-        let (len, name) = Decoder::parse_string(wire, *idx, 3, huffman_transformer)?;
+    pub fn literal_literal_name(wire: &Vec<u8>, idx: &mut usize) -> Result<(Header, bool), Box<dyn error::Error>> {
+        let (len, name) = Decoder::parse_string(wire, *idx, 3)?;
         *idx += len;
-        let (len, value) = Decoder::parse_string(wire, *idx, 7, huffman_transformer)?;
+        let (len, value) = Decoder::parse_string(wire, *idx, 7)?;
         *idx += len;
 
         Ok((Header::from_string(name, value), false))

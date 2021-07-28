@@ -6,6 +6,8 @@ use crate::table::Table;
 use core::fmt;
 use std::error;
 use std::sync::{Arc, Condvar, Mutex, RwLock};
+#[macro_use]
+extern crate lazy_static;
 
 mod decoder;
 mod dynamic_table;
@@ -19,7 +21,6 @@ pub struct Qpack {
     table: Table,
     blocked_streams_limit: u16,
     cv: Arc<(Mutex<usize>, Condvar)>,
-    huffman_transformer: HuffmanTransformer,
 }
 
 impl Qpack {
@@ -31,13 +32,11 @@ impl Qpack {
             table: Table::new(dynamic_table_max_capacity, Arc::clone(&cv)),
             blocked_streams_limit,
             cv,
-            huffman_transformer: HuffmanTransformer::new(),
         }
     }
     pub fn encode_insert_headers(&self, encoded: &mut Vec<u8>, headers: Vec<Header>, use_huffman: bool)
         -> Result<Box<dyn FnOnce() -> Result<(), Box<dyn error::Error>>>,
                     Box<dyn error::Error>> {
-        let wrapped_huffman = if use_huffman {Some(&self.huffman_transformer)} else {None};
         for header in &headers {
             let (both_match, on_static, idx) = self.table.find_index(header);
             let idx = if idx != (1 << 32) - 1 && !on_static {
@@ -48,9 +47,9 @@ impl Qpack {
             if both_match && !on_static {
                 Encoder::duplicate(encoded, idx)?;
             } else if idx != (1 << 32) - 1 {
-                Encoder::insert_with_name_reference(encoded, on_static, idx, &header.1, wrapped_huffman)?;
+                Encoder::insert_with_name_reference(encoded, on_static, idx, &header.1, use_huffman)?;
             } else {
-                Encoder::insert_with_literal_name(encoded, &header.0, &header.1, wrapped_huffman)?;
+                Encoder::insert_with_literal_name(encoded, &header.0, &header.1, use_huffman)?;
             }
         }
         let dynamic_table = Arc::clone(&self.table.dynamic_table);
@@ -123,7 +122,6 @@ impl Qpack {
         };
         Encoder::prefix(encoded, &self.table, required_insert_count as u32, relative_indexing, base);
 
-        let wrapped_huffman = if use_huffman {Some(&self.huffman_transformer)} else {None};
         for header in headers {
             let (both_match, on_static, idx) = self.table.find_index(&header);
             if both_match {
@@ -135,12 +133,12 @@ impl Qpack {
                 }
             } else if idx != (1 << 32) - 1 {
                 if relative_indexing {
-                    Encoder::literal_post_base_name_reference(encoded, idx as u32, &header.1, wrapped_huffman);
+                    Encoder::literal_post_base_name_reference(encoded, idx as u32, &header.1, use_huffman);
                 } else {
-                    Encoder::literal_name_reference(encoded, idx as u32, &header.1, on_static, wrapped_huffman);
+                    Encoder::literal_name_reference(encoded, idx as u32, &header.1, on_static, use_huffman);
                 }
             } else { // not found
-                Encoder::literal_literal_name(encoded, &header, wrapped_huffman);
+                Encoder::literal_literal_name(encoded, &header, use_huffman);
             }
         }
         let encoder = Arc::clone(&self.encoder);
@@ -180,9 +178,9 @@ impl Qpack {
             let ret = if wire[idx] & FieldType::INDEXED == FieldType::INDEXED {
                 Decoder::indexed(wire, &mut idx, base, &self.table)?
             } else if wire[idx] & FieldType::LITERAL_NAME_REFERENCE == FieldType::LITERAL_NAME_REFERENCE {
-                Decoder::literal_name_reference(wire, &mut idx, base, &self.table, &self.huffman_transformer)?
+                Decoder::literal_name_reference(wire, &mut idx, base, &self.table)?
             } else if wire[idx] & FieldType::LITERAL_LITERAL_NAME == FieldType::LITERAL_LITERAL_NAME {
-                Decoder::literal_literal_name(wire, &mut idx, &self.huffman_transformer)?
+                Decoder::literal_literal_name(wire, &mut idx)?
             } else if wire[idx] & FieldType::INDEXED_POST_BASE_INDEX == FieldType::INDEXED_POST_BASE_INDEX {
                 Decoder::indexed_post_base_index(wire, &mut idx, base, &self.table)?
             } else if wire[idx] & 0b11110000 == FieldType::LITERAL_POST_BASE_NAME_REFERENCE {
@@ -208,11 +206,11 @@ impl Qpack {
 
         while idx < wire_len {
             idx += if wire[idx] & encoder::Instruction::INSERT_WITH_NAME_REFERENCE == encoder::Instruction::INSERT_WITH_NAME_REFERENCE {
-                let (output, input) = Decoder::insert_with_name_reference(wire, idx, &self.huffman_transformer)?;
+                let (output, input) = Decoder::insert_with_name_reference(wire, idx)?;
                 commit_funcs.push(self.table.insert_with_name_reference(input.0, input.1, input.2)?);
                 output
             } else if wire[idx] & encoder::Instruction::INSERT_WITH_LITERAL_NAME == encoder::Instruction::INSERT_WITH_LITERAL_NAME {
-                let (output, input) = Decoder::insert_with_literal_name(wire, idx, &self.huffman_transformer)?;
+                let (output, input) = Decoder::insert_with_literal_name(wire, idx)?;
                 commit_funcs.push(self.table.insert_with_literal_name(input.0, input.1)?);
                 output
             } else if wire[idx] & encoder::Instruction::SET_DYNAMIC_TABLE_CAPACITY == encoder::Instruction::SET_DYNAMIC_TABLE_CAPACITY {

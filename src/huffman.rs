@@ -1,6 +1,12 @@
 use std::error;
 use std::boxed::Box;
 
+lazy_static! {
+	pub static ref HUFFMAN_TRANSFORMER: HuffmanTransformer = {
+		HuffmanTransformer::new()
+	};
+}
+
 #[derive(Clone)]
 pub struct Node {
 	left: Option<Box<Node>>,
