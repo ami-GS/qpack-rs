@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::error;
 use std::boxed::Box;
 
@@ -14,10 +15,19 @@ pub struct Node {
 	ascii: u16,
 }
 pub struct HuffmanTransformer {
-	root: Box<Node>
+	root: Box<Node>,
+	dict: HashMap<(u32, u8), u16>
 }
 impl HuffmanTransformer {
-	pub fn build_tree() -> Box<Node> {
+	fn build_map() -> HashMap<(u32, u8), u16> {
+		let mut dict = HashMap::<(u32, u8), u16>::new();
+		for (ascii, (code, bitlen)) in HUFFMAN_TABLE.iter().enumerate() {
+			dict.insert((*code, *bitlen), ascii as u16);
+		}
+		dict
+	}
+	// TODO: fix
+	fn build_tree() -> Box<Node> {
 		let root = Box::new(Node {left: None, right: None, ascii: u16::MAX});
 		for (ascii, (code, bitlen)) in HUFFMAN_TABLE.iter().enumerate() {
 			let mut p = root.clone();
@@ -40,7 +50,8 @@ impl HuffmanTransformer {
 	}
 	pub fn new() -> Self {
 		Self {
-			root: HuffmanTransformer::build_tree()
+			root: HuffmanTransformer::build_tree(),
+			dict: HuffmanTransformer::build_map(),
 		}
 	}
 
@@ -74,11 +85,13 @@ impl HuffmanTransformer {
         }
         Ok(())
     }
-    pub fn decode(&self, wire: &Vec<u8>, idx: usize, str_len: usize) -> Result<String, Box<dyn error::Error>>{
+
+    // TODO: fix
+    pub fn decode_by_tree(&self, wire: &Vec<u8>, idx: usize, str_len: usize) -> Result<String, Box<dyn error::Error>> {
         let mut value = String::new();
         let mut p = self.root.clone();
 		for i in 0..str_len {
-			for j in 7..=0 {
+			for j in (0..8).rev() {
 				// TODO: error if right/left is None
 				if wire[idx + i] & (1 << j) > 0 {
 					p = p.right.unwrap();
@@ -93,6 +106,33 @@ impl HuffmanTransformer {
 				}
 			}
 		}
+        Ok(value)
+    }
+    pub fn decode(&self, wire: &Vec<u8>, idx: usize, str_len: usize) -> Result<String, Box<dyn error::Error>> {
+        let mut value = String::new();
+        let mut tmp: u32 = 0;
+        let mut bit_len: u8 = 0;
+        for i in 0..str_len {
+            let mut sub = tmp;
+            for j in (0..8).rev() { // 7..=0
+                sub = (sub << 1) | ((wire[idx + i] >> j & 0b1) as u32);
+                bit_len += 1;
+                if self.dict.contains_key(&(sub, bit_len)) {
+                    value.push((self.dict[&(sub, bit_len)] as u8) as char);
+                    tmp = 0;
+                    bit_len = 0;
+                    sub = 0;
+                }
+            }
+			if tmp == 0 {
+				tmp = wire[idx + i] as u32 & ((1 << (bit_len)) - 1);
+			} else {
+				tmp = (tmp << 8) + wire[idx + 1] as u32;
+			}
+        }
+        if bit_len != 0 || tmp != 0 {
+            // TODO: parse error
+        }
         Ok(value)
     }
 }
@@ -359,3 +399,21 @@ const HUFFMAN_TABLE: [HuffmanCode; HUFFMAN_TABLE_SIZE] = [
 	(0x3ffffee, 26),
 	(0x3fffffff, 30)
 ];
+
+
+#[cfg(test)]
+mod tests {
+	use crate::huffman::HUFFMAN_TRANSFORMER;
+	#[test]
+	fn encode_decode() {
+		let values = vec!["www.example.com"];
+		let mut encoded = vec![];
+		for value in values {
+			let out = HUFFMAN_TRANSFORMER.encode(&mut encoded, value);
+			println!("{:02x?}", encoded);
+			assert_eq!(out.unwrap(), ());
+			let out = HUFFMAN_TRANSFORMER.decode(&encoded, 0, encoded.len());
+			assert_eq!(&out.unwrap(), value);
+		}
+	}
+}

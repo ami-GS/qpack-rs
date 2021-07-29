@@ -1,5 +1,3 @@
-use huffman::HuffmanTransformer;
-
 use crate::decoder::Decoder;
 use crate::encoder::Encoder;
 use crate::table::Table;
