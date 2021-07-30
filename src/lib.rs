@@ -415,6 +415,24 @@ mod tests {
     use std::{error, sync::{Arc, RwLock}, thread};
     use crate::{Header, Qpack};
     static STREAM_ID: u16 = 4;
+
+    #[test]
+    fn qnum_encode_decode() {
+        let mut values: Vec<u32> = (0..(u16::MAX as u32 * 2)).collect();
+        values.push(u32::MAX);
+        values.push(u32::MAX-1);
+
+        for i in values {
+            for j in 1..8 {
+                let mut encoded = vec![];
+                let len = crate::Qnum::encode(&mut encoded, i, j);
+                let out = crate::Qnum::decode(&encoded, 0, j);
+                assert_eq!(i, out.1);
+                assert_eq!(len, out.0);
+            }
+        }
+    }
+
 	#[test]
 	fn rfc_appendix_b1_encode() {
 		let qpack = Qpack::new(1, 1024);
