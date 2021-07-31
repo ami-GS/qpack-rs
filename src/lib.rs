@@ -416,6 +416,26 @@ mod tests {
     use crate::{Header, Qpack};
     static STREAM_ID: u16 = 4;
 
+    fn commit(func: Result<Box<dyn FnOnce() -> Result<(), Box<dyn error::Error>>>,
+                            Box<dyn error::Error>>) {
+        match func {
+            Ok(ok) => {
+                match ok() {
+                    Ok(_) => (),
+                    Err(e) => {
+                        println!("{:?}", e);
+                        assert!(false);
+                        ()
+                    },
+                }
+            },
+            Err(e) => {
+                println!("{:?}", e);
+                assert!(false);
+            },
+        }
+    }
+
     #[test]
     fn qnum_encode_decode() {
         let mut values: Vec<u32> = (0..(u16::MAX as u32 * 2)).collect();
@@ -455,7 +475,7 @@ mod tests {
         ];
         let mut encoded = vec![];
         let commit_func = qpack_encoder.encode_headers(&mut encoded, false, request_headers.clone(), STREAM_ID, false);
-        commit_func.unwrap()();
+        commit(commit_func);
         let out = qpack_decoder.decode_headers(&encoded, STREAM_ID).unwrap();
         assert!(!out.1);
         assert_eq!(request_headers, out.0);
@@ -467,8 +487,7 @@ mod tests {
 		let headers = vec![Header::from(":path", "/index.html")];
 		let mut encoded = vec![];
 		let commit_func = qpack.encode_headers(&mut encoded, false, headers, STREAM_ID, false);
-		let out = commit_func.unwrap()();
-		assert_eq!(out.unwrap(), ());
+        commit(commit_func);
 		assert_eq!(encoded,
 					vec![0x00, 0x00, 0x51, 0x0b, 0x2f,
 						 0x69, 0x6e, 0x64, 0x65, 0x78,
@@ -491,8 +510,7 @@ mod tests {
 		let headers = vec![Header::from(":path", "/")];
         let mut encoded = vec![];
 		let commit_func = qpack.encode_headers(&mut encoded, false, headers, STREAM_ID, false);
-		let out = commit_func.unwrap()();
-		assert_eq!(out.unwrap(), ());
+        commit(commit_func);
 		assert_eq!(encoded,
 			vec![0x00, 0x00, 0xc1]);
 	}
@@ -520,20 +538,18 @@ mod tests {
         let safe_decoder = Arc::new(RwLock::new(qpack_decoder));
 
         let f = |headers: Vec<Header>, stream_id: u16, expected_wire: Vec<u8>,
-                                                encoder: Arc<RwLock<Qpack>>, decoder: Arc<RwLock<Qpack>>| -> Result<(), Box<dyn error::Error>> {
+                                                encoder: Arc<RwLock<Qpack>>, decoder: Arc<RwLock<Qpack>>| {
             let mut encoded = vec![];
-            let commit_func = encoder.read().unwrap().encode_headers(&mut encoded, false, headers.clone(), stream_id, false)?;
-            let out = commit_func();
-            assert_eq!(out.unwrap(), ());
+            let commit_func = encoder.read().unwrap().encode_headers(&mut encoded, false, headers.clone(), stream_id, false);
+            commit(commit_func);
             //assert_eq!(encoded, expected_wire);
 
-            if let Ok(out) = decoder.write().unwrap().decode_headers(&encoded, stream_id) {
+            if let Ok(out) = decoder.read().unwrap().decode_headers(&encoded, stream_id) {
                 assert_eq!(out.0, headers);
                 assert_eq!(out.1, false);
             } else {
                 assert!(false);
             }
-            Ok(())
         };
 
         let mut ths = vec![];
@@ -546,8 +562,7 @@ mod tests {
             let headers = headers_set[i].clone();
             let expected_wire = expected_wires[i].clone();
             ths.push(thread::spawn(move || {
-                let _ = f(headers, 4 + (i as u16) * 2,
-                        expected_wire, en , de);
+                f(headers, 4 + (i as u16) * 2, expected_wire, en, de);
             }));
         }
         for th in ths {
@@ -564,8 +579,7 @@ mod tests {
             let mut encoded = vec![];
             let capacity = 220;
             let commit_func = qpack_encoder.encode_set_dynamic_table_capacity(&mut encoded, capacity);
-            let out = commit_func.unwrap()();
-            assert_eq!(out.unwrap(), ());
+            commit(commit_func);
             let headers = vec![Header::from(":authority", "www.example.com"),
                                           Header::from(":path", "/sample/path")];
 
@@ -575,12 +589,10 @@ mod tests {
                                     0x6c, 0x65, 0x2e, 0x63, 0x6f, 0x6d, 0xc1,
                                     0x0c, 0x2f, 0x73, 0x61, 0x6d, 0x70, 0x6c,
                                     0x65, 0x2f, 0x70, 0x61, 0x74, 0x68]);
-            let out = commit_func.unwrap()();
-            assert_eq!(out.unwrap(), ());
+            commit(commit_func);
 
             let commit_func = qpack_decoder.decode_encoder_instruction(&encoded);
-            let out = commit_func.unwrap()();
-            assert_eq!(out.unwrap(), ());
+            commit(commit_func);
 
             qpack_encoder.dump_dynamic_table();
             qpack_decoder.dump_dynamic_table();
@@ -592,8 +604,7 @@ mod tests {
             let headers = vec![Header::from(":authority", "www.example.com"),
                                           Header::from(":path", "/sample/path")];
             let commit_func = qpack_encoder.encode_headers(&mut encoded, true, headers.clone(), STREAM_ID, false);
-            let out = commit_func.unwrap()();
-            assert_eq!(out.unwrap(), ());
+            commit(commit_func);
             assert_eq!(encoded, vec![0x03, 0x81, 0x10, 0x11]);
 
             if let Ok(decoded) = qpack_decoder.decode_headers(&encoded, STREAM_ID) {
@@ -609,12 +620,10 @@ mod tests {
             let mut encoded = vec![];
             let commit_func = qpack_decoder.encode_section_ackowledgment(&mut encoded, STREAM_ID);
             assert_eq!(encoded, vec![0x84]);
-            let out = commit_func.unwrap()();
-            assert_eq!(out.unwrap(), ());
+            commit(commit_func);
 
             let commit_func = qpack_encoder.decode_decoder_instruction(&encoded);
-            let out = commit_func.unwrap()();
-            assert_eq!(out.unwrap(), ());
+            commit(commit_func);
             println!("dump encoder side dynamic table");
             qpack_encoder.dump_dynamic_table();
             println!("dump decoder side dynamic table");
@@ -629,12 +638,10 @@ mod tests {
             assert_eq!(encoded, vec![0x4a, 0x63, 0x75, 0x73, 0x74, 0x6f, 0x6d, 0x2d, 0x6b, 0x65,
                                     0x79, 0x0c, 0x63, 0x75, 0x73, 0x74, 0x6f, 0x6d, 0x2d, 0x76,
                                     0x61, 0x6c, 0x75, 0x65]);
-            let out = commit_func.unwrap()();
-            assert_eq!(out.unwrap(), ());
+            commit(commit_func);
 
             let commit_func = qpack_decoder.decode_encoder_instruction(&encoded);
-            let out = commit_func.unwrap()();
-            assert_eq!(out.unwrap(), ());
+            commit(commit_func);
 
             println!("dump encoder side dynamic table");
             qpack_encoder.dump_dynamic_table();
@@ -647,12 +654,10 @@ mod tests {
             let mut encoded = vec![];
             let commit_func = qpack_decoder.encode_insert_count_increment(&mut encoded);
             assert_eq!(encoded, vec![0x01]);
-            let out = commit_func.unwrap()();
-            assert_eq!(out.unwrap(), ());
+            commit(commit_func);
 
             let commit_func = qpack_encoder.decode_decoder_instruction(&encoded);
-            let out = commit_func.unwrap()();
-            assert_eq!(out.unwrap(), ());
+            commit(commit_func);
 
             qpack_encoder.dump_dynamic_table();
             qpack_decoder.dump_dynamic_table();
@@ -664,12 +669,10 @@ mod tests {
             let headers = vec![Header::from(":authority", "www.example.com")];
             let commit_func = qpack_encoder.encode_insert_headers(&mut encoded, headers, false);
             assert_eq!(encoded, vec![0x02]);
-            let out = commit_func.unwrap()();
-            assert_eq!(out.unwrap(), ());
+            commit(commit_func);
 
             let commit_func = qpack_decoder.decode_encoder_instruction(&encoded);
-            let out = commit_func.unwrap()();
-            assert_eq!(out.unwrap(), ());
+            commit(commit_func);
 
             qpack_encoder.dump_dynamic_table();
             qpack_decoder.dump_dynamic_table();
@@ -682,8 +685,7 @@ mod tests {
                                         Header::from(":path", "/"),
                                         Header::from("custom-key", "custom-value")];
             let commit_func = qpack_encoder.encode_headers(&mut encoded, false, headers.clone(), 8, false);
-            let out = commit_func.unwrap()();
-            assert_eq!(out.unwrap(), ());
+            commit(commit_func);
             assert_eq!(encoded, vec![0x05, 0x00, 0x80, 0xc1, 0x81]);
 
             if let Ok(decoded) = qpack_decoder.decode_headers(&encoded, 8) {
@@ -699,12 +701,10 @@ mod tests {
             let mut encoded = vec![];
             let commit_func = qpack_decoder.encode_stream_cancellation(&mut encoded, 8);
             assert_eq!(encoded, vec![0x48]);
-            let out = commit_func.unwrap()();
-            assert_eq!(out.unwrap(), ());
+            commit(commit_func);
 
             let commit_func = qpack_encoder.decode_decoder_instruction(&encoded);
-            let out = commit_func.unwrap()();
-            assert_eq!(out.unwrap(), ());
+            commit(commit_func);
         }
 
         println!("Step 9");
