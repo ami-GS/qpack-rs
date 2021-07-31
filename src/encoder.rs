@@ -61,8 +61,9 @@ impl Encoder {
                 let len = Qnum::encode(encoded, encoded2.len() as u32, n);
                 let wire_len = encoded.len();
                 encoded[wire_len - len] |= 1 << n;
+                let encoded2_len = encoded2.len();
                 encoded.append(&mut encoded2);
-                len + encoded2.len()
+                len + encoded2_len
             } else {
                 let len = Qnum::encode(encoded, value.len() as u32, n);
                 encoded.append(&mut value.as_bytes().to_vec());
