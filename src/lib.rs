@@ -123,17 +123,25 @@ impl Qpack {
         for header in headers {
             let (both_match, on_static, idx) = self.table.find_index(&header);
             if both_match {
-                if relative_indexing {
-                    Encoder::indexed_post_base_index(encoded, idx as u32);
+                if on_static {
+                    Encoder::indexed(encoded, idx as u32, true);
                 } else {
-                    let abs_idx = if on_static { idx } else { base as usize - idx - 1 };
-                    Encoder::indexed(encoded, abs_idx as u32, on_static);
+                    if relative_indexing {
+                        Encoder::indexed_post_base_index(encoded, idx as u32);
+                    } else {
+                        let abs_idx = if on_static { idx } else { base as usize - idx - 1 };
+                        Encoder::indexed(encoded, abs_idx as u32, false);
+                    }
                 }
             } else if idx != (1 << 32) - 1 {
-                if relative_indexing {
-                    Encoder::literal_post_base_name_reference(encoded, idx as u32, &header.1, use_huffman);
+                if on_static {
+                    Encoder::literal_name_reference(encoded, idx as u32, &header.1, true, use_huffman);
                 } else {
-                    Encoder::literal_name_reference(encoded, idx as u32, &header.1, on_static, use_huffman);
+                    if relative_indexing {
+                        Encoder::literal_post_base_name_reference(encoded, idx as u32, &header.1, use_huffman);
+                    } else {
+                        Encoder::literal_name_reference(encoded, idx as u32, &header.1, false, use_huffman);
+                    }
                 }
             } else { // not found
                 Encoder::literal_literal_name(encoded, &header, use_huffman);
