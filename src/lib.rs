@@ -289,12 +289,18 @@ impl Qnum {
     pub fn encode(encoded: &mut Vec<u8>, val: u32, n: u8) -> usize {
 		let mut val = val;
         let mut len = 1;
-        if val < (1 << n) - 1 {
+        let mask: u8 = if n == 8 {
+            0xff
+        } else {
+            (1 << n) - 1
+        };
+        if val < mask as u32 {
             encoded.push(val as u8);
             return len;
         }
-        encoded.push((1 << n) - 1);
-        val -= (1 << n) - 1;
+
+        encoded.push(mask);
+        val -= mask as u32;
         while val >= 128 {
             encoded.push(((val & 0b01111111) | 0b10000000) as u8);
             val = val >> 7;
@@ -443,7 +449,7 @@ mod tests {
         values.push(u32::MAX-1);
 
         for i in values {
-            for j in 1..8 {
+            for j in 1..=8 {
                 let mut encoded = vec![];
                 let len = crate::Qnum::encode(&mut encoded, i, j);
                 let out = crate::Qnum::decode(&encoded, 0, j);
