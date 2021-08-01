@@ -420,7 +420,27 @@ impl Header {
 mod tests {
     use std::{error, sync::{Arc, RwLock}, thread};
     use crate::{Header, Qpack};
+
     static STREAM_ID: u16 = 4;
+    fn get_headers() -> Vec<Header> {
+        vec![
+            Header::from(":authority", "example.com"),
+            Header::from(":method", "GET"),
+            Header::from(":path", "/"),
+            Header::from(":scheme", "https"),
+            Header::from("accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9"),
+            Header::from("accept-encoding", "gzip, deflate, br"),
+            Header::from("accept-language", "en-US,en;q=0.9"),
+            Header::from("sec-ch-ua", "\"Chromium\";v=\"92\", \" Not A;Brand\";v=\"99\", \"Google Chrome\";v=\"92\""),
+            Header::from("sec-ch-ua-mobile", "?0"),
+            Header::from("sec-fetch-dest", "document"),
+            Header::from("sec-fetch-mode", "navigate"),
+            Header::from("sec-fetch-site", "none"),
+            Header::from("sec-fetch-user", "?1"),
+            Header::from("upgrade-insecure-requests", "1"),
+            Header::from("user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.107 Safari/537.36")
+        ]
+    }
 
     fn commit(func: Result<Box<dyn FnOnce() -> Result<(), Box<dyn error::Error>>>,
                             Box<dyn error::Error>>) {
@@ -462,29 +482,30 @@ mod tests {
     fn simple_get() {
         let qpack_encoder = Qpack::new(1, 1024);
         let qpack_decoder = Qpack::new(1, 1024);
-        let request_headers = vec![
-            Header::from(":authority", "example.com"),
-            Header::from(":method", "GET"),
-            Header::from(":path", "/"),
-            Header::from(":scheme", "https"),
-            Header::from("accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9"),
-            Header::from("accept-encoding", "gzip, deflate, br"),
-            Header::from("accept-language", "en-US,en;q=0.9"),
-            Header::from("sec-ch-ua", "\"Chromium\";v=\"92\", \" Not A;Brand\";v=\"99\", \"Google Chrome\";v=\"92\""),
-            Header::from("sec-ch-ua-mobile", "?0"),
-            Header::from("sec-fetch-dest", "document"),
-            Header::from("sec-fetch-mode", "navigate"),
-            Header::from("sec-fetch-site", "none"),
-            Header::from("sec-fetch-user", "?1"),
-            Header::from("upgrade-insecure-requests", "1"),
-            Header::from("user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.107 Safari/537.36")
-        ];
         let mut encoded = vec![];
+        let request_headers = get_headers();
         let commit_func = qpack_encoder.encode_headers(&mut encoded, false, request_headers.clone(), STREAM_ID, false);
         commit(commit_func);
         let out = qpack_decoder.decode_headers(&encoded, STREAM_ID).unwrap();
         assert!(!out.1);
         assert_eq!(request_headers, out.0);
+    }
+
+    #[test]
+    fn insert_simple_headers() {
+        let table_size = 4096;
+        let qpack_encoder = Qpack::new(1, table_size);
+        let qpack_decoder = Qpack::new(1, table_size);
+        let mut encoded = vec![];
+        let request_headers = get_headers();
+        let commit_func = qpack_encoder.encode_set_dynamic_table_capacity(&mut encoded, table_size);
+        commit(commit_func);
+        let commit_func = qpack_encoder.encode_insert_headers(&mut encoded, request_headers.clone(), true);
+        commit(commit_func);
+        let commit_func = qpack_decoder.decode_encoder_instruction(&encoded);
+        commit(commit_func);
+        qpack_encoder.dump_dynamic_table();
+        qpack_decoder.dump_dynamic_table();
     }
 
 	#[test]

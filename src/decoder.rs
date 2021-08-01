@@ -43,7 +43,7 @@ impl Decoder {
     pub fn insert_with_name_reference(wire: &Vec<u8>, idx: usize) -> Result<(usize, (usize, String, bool)), Box<dyn error::Error>> {
         let on_static_table = wire[idx] & 0b01000000 == 0b01000000;
         let (len1, name_idx) = Qnum::decode(wire, idx, 6);
-        let (len2, value) = Decoder::parse_string(wire, idx + len1, 6)?;
+        let (len2, value) = Decoder::parse_string(wire, idx + len1, 7)?;
         Ok((len1 + len2, (name_idx as usize, value.to_string(), on_static_table)))
     }
     pub fn insert_with_literal_name(wire: &Vec<u8>, idx: usize) -> Result<(usize, (String, String)), Box<dyn error::Error>> {
