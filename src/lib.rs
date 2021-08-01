@@ -508,6 +508,32 @@ mod tests {
         qpack_decoder.dump_dynamic_table();
     }
 
+    #[test]
+    fn insert_encode_decode() {
+        let table_size = 4096;
+        let qpack_encoder = Qpack::new(1, table_size);
+        let qpack_decoder = Qpack::new(1, table_size);
+        let request_headers = get_headers();
+        {
+            let mut encoded = vec![];
+            let commit_func = qpack_encoder.encode_set_dynamic_table_capacity(&mut encoded, table_size);
+            commit(commit_func);
+            let commit_func = qpack_encoder.encode_insert_headers(&mut encoded, request_headers.clone(), false);
+            commit(commit_func);
+            let commit_func = qpack_decoder.decode_encoder_instruction(&encoded);
+            commit(commit_func);
+        }
+
+        {
+            let mut encoded = vec![];
+            let commit_func = qpack_encoder.encode_headers(&mut encoded, false, request_headers.clone(), STREAM_ID, false);
+            commit(commit_func);
+            let out = qpack_decoder.decode_headers(&encoded, STREAM_ID).unwrap();
+            assert!(out.1);
+            assert_eq!(request_headers, out.0);
+        }
+    }
+
 	#[test]
 	fn rfc_appendix_b1_encode() {
 		let qpack = Qpack::new(1, 1024);
@@ -741,11 +767,10 @@ mod tests {
             let commit_func = qpack_encoder.encode_insert_headers(&mut encoded, headers, false);
             assert_eq!(encoded, vec![0x81, 0x0d, 0x63, 0x75, 0x73, 0x74, 0x6f, 0x6d,
                                      0x2d, 0x76, 0x61, 0x6c, 0x75, 0x65, 0x32]);
-            let out = commit_func.unwrap()();
-            assert_eq!(out.unwrap(), ());
+                                     commit(commit_func);
 
             let commit_func = qpack_decoder.decode_encoder_instruction(&encoded);
-            let _ = commit_func.unwrap()();
+            commit(commit_func);
 
             println!("dump encoder side dynamic table");
             qpack_encoder.dump_dynamic_table();
