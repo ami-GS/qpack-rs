@@ -8,6 +8,9 @@ pub struct Entry {
     _index: usize,
 }
 pub struct DynamicTable {
+    // TODO: linked list is not appropriate.
+    //       relative index access should not care about evicted entries.
+    //       so start from begin/end could not access appropriate entry
     pub list: LinkedList<Entry>,
     pub current_size: usize,
     pub capacity: usize,
@@ -59,7 +62,7 @@ impl DynamicTable {
         }
 
         while idx > 0 {
-            self.list.pop_back();
+            self.list.pop_front();
             idx -= 1;
         }
         self.current_size = current_size;
@@ -82,24 +85,30 @@ impl DynamicTable {
         }
     }
     pub fn find_index(&self, target: &Header) -> (bool, usize) {
-        let insert_count = self.get_insert_count();
+        // TODO: really bad design due to linked list
         let mut candidate_idx = (1 << 32) - 1;
         if self.current_size == 0 {
             return (false, candidate_idx);
         }
-        let mut abs_idx = insert_count - 1;
+        // relative from base opposit end
+        let mut abs_idx = 0;
+        let mut both_found = false;
         for entry in self.list.iter() {
             if entry.header.0.eq(&target.0) {
                 if entry.header.1.eq(&target.1) {
-                    return (true, abs_idx);
+                    both_found |= true;
+                    candidate_idx = abs_idx;
+                    // INFO: the reason why not return quickly is because this loop is
+                    //       traversing in opposit direction. need to fix design
+                    //return (true, abs_idx);
                 }
-                candidate_idx = abs_idx;
+                if !both_found {
+                    candidate_idx = abs_idx;
+                }
             }
-            if abs_idx != 0 {
-                abs_idx -= 1;
-            }
+            abs_idx += 1;
         }
-        (false, candidate_idx)
+        (both_found, candidate_idx)
     }
     pub fn insert(&mut self, header: Header) -> Result<(), Box<dyn error::Error>> {
         // TODO: would be able to remove this get
@@ -111,30 +120,20 @@ impl DynamicTable {
         // copy before eviction to avoid referenced entry to be deleted;
         // let dyn_header = (header.0.to_string(), header.1.to_string());
         self.evict_upto(self.capacity - size)?;
-        self.list.push_front(Entry{header: header, _index: insert_count});
+        self.list.push_back(Entry{header: header, _index: insert_count});
 
         self.increment_insert_count();
 
         self.current_size += size;
         Ok(())
     }
-    pub fn get(&self, relative_idx: usize, post_base: bool, calc_idx: bool) -> Result<Header, Box<dyn error::Error>> {
-        let insert_count = self.get_insert_count();
-        let abs_idx = if calc_idx {
-            if post_base {
-                insert_count + relative_idx
-            } else {
-                insert_count - relative_idx - 1
-            }
-        } else {
-            relative_idx
-        };
-        let mut i = insert_count;
+    pub fn get(&self, abs_idx: usize) -> Result<Header, Box<dyn error::Error>> {
+        let mut i = 0;
         for entry in self.list.iter() {
-            if abs_idx == i-1 {
+            if abs_idx == i {
                 return Ok(Header::from(&entry.header.0, &entry.header.1));
             }
-            i -= 1;
+            i += 1;
         }
         // TODO: error
         Ok(Header::from("NOT_FOUND", "NOT_FOUND"))

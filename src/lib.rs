@@ -38,7 +38,7 @@ impl Qpack {
         for header in &headers {
             let (both_match, on_static, idx) = self.table.find_index(header);
             let idx = if idx != (1 << 32) - 1 && !on_static {
-                // absolute to relative conversion
+                // absolute to relative (against 0) conversion
                 self.table.get_insert_count() - 1 - idx
             } else { idx };
 
@@ -107,40 +107,40 @@ impl Qpack {
             Ok(())
         }))
     }
-    pub fn encode_headers(&self, encoded: &mut Vec<u8>, relative_indexing: bool, headers: Vec<Header>, stream_id: u16, use_huffman: bool)
+    pub fn encode_headers(&self, encoded: &mut Vec<u8>, post_base: bool, headers: Vec<Header>, stream_id: u16, use_huffman: bool)
         -> Result<Box<dyn FnOnce() -> Result<(), Box<dyn error::Error>>>,
                     Box<dyn error::Error>> {
         // TODO: decide whether to use s_flag (relative indexing)
         let required_insert_count = self.table.get_insert_count();
-        // TODO: suspicious
-        let base = if relative_indexing {
+        // base can be decided by program. # 3.2.5~
+        let base = if post_base {
             0
         } else {
             self.table.get_insert_count() as u32
         };
-        Encoder::prefix(encoded, &self.table, required_insert_count as u32, relative_indexing, base);
+        Encoder::prefix(encoded, &self.table, required_insert_count as u32, post_base, base);
 
+        // TODO: currently Base of PostBase is always 0, but need to adjust relative index if Base is not 0 when to use PostBase
         for header in headers {
             let (both_match, on_static, idx) = self.table.find_index(&header);
             if both_match {
                 if on_static {
                     Encoder::indexed(encoded, idx as u32, true);
                 } else {
-                    if relative_indexing {
+                    if post_base {
                         Encoder::indexed_post_base_index(encoded, idx as u32);
                     } else {
-                        let abs_idx = if on_static { idx } else { base as usize - idx - 1 };
-                        Encoder::indexed(encoded, abs_idx as u32, false);
+                        Encoder::indexed(encoded, base - idx as u32 - 1, false);
                     }
                 }
             } else if idx != (1 << 32) - 1 {
                 if on_static {
                     Encoder::literal_name_reference(encoded, idx as u32, &header.1, true, use_huffman);
                 } else {
-                    if relative_indexing {
+                    if post_base {
                         Encoder::literal_post_base_name_reference(encoded, idx as u32, &header.1, use_huffman);
                     } else {
-                        Encoder::literal_name_reference(encoded, idx as u32, &header.1, false, use_huffman);
+                        Encoder::literal_name_reference(encoded, base - idx as u32 - 1, &header.1, false, use_huffman);
                     }
                 }
             } else { // not found

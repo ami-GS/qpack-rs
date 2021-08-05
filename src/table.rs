@@ -53,7 +53,7 @@ impl Table {
         } else {
             base - idx - 1
         };
-        self.dynamic_table.read().unwrap().get(idx, post_base, false)
+        self.dynamic_table.read().unwrap().get(idx)
     }
     pub fn set_dynamic_table_capacity(&self, capacity: usize)
         -> Result<Box<dyn FnOnce() -> Result<(), Box<dyn error::Error>>>,
@@ -67,9 +67,9 @@ impl Table {
         -> Result<Box<dyn FnOnce() -> Result<(), Box<dyn error::Error>>>,
                     Box<dyn error::Error>> {
         let name = if on_static {
-            STATIC_TABLE[idx].0.to_string()
+            self.get_from_static(idx)?.0.to_string()
         } else {
-            self.dynamic_table.read().unwrap().get(idx, false, true)?.0
+            self.get_from_dynamic(self.get_insert_count(), idx, false)?.0
         };
         let dynamic_table = Arc::clone(&self.dynamic_table);
         Ok(Box::new(move || -> Result<(), Box<dyn error::Error>> {
@@ -87,7 +87,7 @@ impl Table {
     pub fn duplicate(&self, idx: usize)
         -> Result<Box<dyn FnOnce() -> Result<(), Box<dyn error::Error>>>,
                     Box<dyn error::Error>> {
-        let header = self.dynamic_table.read().unwrap().get(idx, false, true)?;
+        let header = self.get_from_dynamic(self.get_insert_count(), idx, false)?;
         let dynamic_table = Arc::clone(&self.dynamic_table);
         Ok(Box::new(move || -> Result<(), Box<dyn error::Error>> {
             dynamic_table.write().unwrap().insert(header)
