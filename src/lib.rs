@@ -107,22 +107,57 @@ impl Qpack {
             Ok(())
         }))
     }
-    pub fn encode_headers(&self, encoded: &mut Vec<u8>, post_base: bool, headers: Vec<Header>, stream_id: u16, use_huffman: bool)
+
+    fn get_prefix_meta_data(&self, find_index_results: &Vec<(bool, bool, usize)>, refer_dynamic_table: bool) -> (usize, bool, u32) {
+        if !refer_dynamic_table {
+            return (0, false, 0);
+        }
+        // if same distribusion, then post base.
+        // currently just range
+        let mut min_max = (usize::MAX, usize::MIN);
+        for i in 0..find_index_results.len() {
+            let result = &find_index_results[i];
+            if result.1 {
+                continue;
+            }
+            if result.2 < min_max.0 {
+                min_max.0 = result.2;
+            }
+            if min_max.1 < result.2 {
+                min_max.1 = result.2;
+            }
+        }
+        let required_insert_count = min_max.1 + 1;
+        let post_base = ((min_max.0 + min_max.1) / 2) < self.table.get_insert_count() / 2;
+        (
+            required_insert_count,
+            post_base,
+            if post_base {min_max.0} else {required_insert_count} as u32
+        )
+    }
+
+    pub fn encode_headers(&self, encoded: &mut Vec<u8>, headers: Vec<Header>, stream_id: u16, use_huffman: bool)
         -> Result<Box<dyn FnOnce() -> Result<(), Box<dyn error::Error>>>,
                     Box<dyn error::Error>> {
-        // TODO: decide whether to use s_flag (relative indexing)
-        let required_insert_count = self.table.get_insert_count();
-        // base can be decided by program. # 3.2.5~
-        let base = if post_base {
-            0
-        } else {
-            self.table.get_insert_count() as u32
-        };
-        Encoder::prefix(encoded, &self.table, required_insert_count as u32, post_base, base);
 
-        // TODO: currently Base of PostBase is always 0, but need to adjust relative index if Base is not 0 when to use PostBase
-        for header in headers {
-            let (both_match, on_static, idx) = self.table.find_index(&header);
+        let mut find_index_results = vec![];
+        let mut refer_dynamic_table = false;
+        for header in &headers {
+            let result = self.table.find_index(header);
+            refer_dynamic_table |= !result.1;
+            find_index_results.push(result);
+        }
+
+        let (required_insert_count, post_base, base) = self.get_prefix_meta_data(&find_index_results, refer_dynamic_table);
+        Encoder::prefix(encoded,
+                        &self.table,
+                        required_insert_count as u32,
+                        post_base,
+                        base);
+
+        for i in 0..headers.len() {
+            let header = &headers[i];
+            let (both_match, on_static, idx) = find_index_results[i];
             if both_match {
                 if on_static {
                     Encoder::indexed(encoded, idx as u32, true);
@@ -492,7 +527,7 @@ mod tests {
         let qpack_decoder = Qpack::new(1, 1024);
         let mut encoded = vec![];
         let request_headers = get_headers();
-        let commit_func = qpack_encoder.encode_headers(&mut encoded, false, request_headers.clone(), STREAM_ID, false);
+        let commit_func = qpack_encoder.encode_headers(&mut encoded, request_headers.clone(), STREAM_ID, false);
         commit(commit_func);
         let out = qpack_decoder.decode_headers(&encoded, STREAM_ID).unwrap();
         assert!(!out.1);
@@ -534,7 +569,7 @@ mod tests {
 
         {
             let mut encoded = vec![];
-            let commit_func = qpack_encoder.encode_headers(&mut encoded, false, request_headers.clone(), STREAM_ID, false);
+            let commit_func = qpack_encoder.encode_headers(&mut encoded, request_headers.clone(), STREAM_ID, false);
             commit(commit_func);
             let out = qpack_decoder.decode_headers(&encoded, STREAM_ID).unwrap();
             assert!(out.1);
@@ -547,7 +582,7 @@ mod tests {
 		let qpack = Qpack::new(1, 1024);
 		let headers = vec![Header::from(":path", "/index.html")];
 		let mut encoded = vec![];
-		let commit_func = qpack.encode_headers(&mut encoded, false, headers, STREAM_ID, false);
+		let commit_func = qpack.encode_headers(&mut encoded, headers, STREAM_ID, false);
         commit(commit_func);
 		assert_eq!(encoded,
 					vec![0x00, 0x00, 0x51, 0x0b, 0x2f,
@@ -570,7 +605,7 @@ mod tests {
 		let qpack = Qpack::new(1, 1024);
 		let headers = vec![Header::from(":path", "/")];
         let mut encoded = vec![];
-		let commit_func = qpack.encode_headers(&mut encoded, false, headers, STREAM_ID, false);
+		let commit_func = qpack.encode_headers(&mut encoded, headers, STREAM_ID, false);
         commit(commit_func);
 		assert_eq!(encoded,
 			vec![0x00, 0x00, 0xc1]);
@@ -601,7 +636,7 @@ mod tests {
         let f = |headers: Vec<Header>, stream_id: u16, expected_wire: Vec<u8>,
                                                 encoder: Arc<RwLock<Qpack>>, decoder: Arc<RwLock<Qpack>>| {
             let mut encoded = vec![];
-            let commit_func = encoder.read().unwrap().encode_headers(&mut encoded, false, headers.clone(), stream_id, false);
+            let commit_func = encoder.read().unwrap().encode_headers(&mut encoded, headers.clone(), stream_id, false);
             commit(commit_func);
             //assert_eq!(encoded, expected_wire);
 
@@ -664,7 +699,7 @@ mod tests {
             let mut encoded = vec![];
             let headers = vec![Header::from(":authority", "www.example.com"),
                                           Header::from(":path", "/sample/path")];
-            let commit_func = qpack_encoder.encode_headers(&mut encoded, true, headers.clone(), STREAM_ID, false);
+            let commit_func = qpack_encoder.encode_headers(&mut encoded, headers.clone(), STREAM_ID, false);
             commit(commit_func);
             assert_eq!(encoded, vec![0x03, 0x81, 0x10, 0x11]);
 
@@ -745,7 +780,7 @@ mod tests {
             let headers = vec![Header::from(":authority", "www.example.com"),
                                         Header::from(":path", "/"),
                                         Header::from("custom-key", "custom-value")];
-            let commit_func = qpack_encoder.encode_headers(&mut encoded, false, headers.clone(), 8, false);
+            let commit_func = qpack_encoder.encode_headers(&mut encoded, headers.clone(), 8, false);
             commit(commit_func);
             assert_eq!(encoded, vec![0x05, 0x00, 0x80, 0xc1, 0x81]);
 
