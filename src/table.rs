@@ -17,7 +17,7 @@ impl Table {
     // TODO: return (both_matched, on_static_table, idx)
     //       try to remove on_static_table as my HPACK did not use
     pub fn find_index(&self, target: &Header) -> (bool, bool, usize) {
-        let not_found_val = (1 << 32) - 1; // TODO: need to set invalid value
+        let not_found_val = usize::MAX;
 
         let mut static_candidate_idx: usize = not_found_val;
         for (idx, (name, val)) in STATIC_TABLE.iter().enumerate() {
@@ -39,7 +39,7 @@ impl Table {
         if ret.1 == not_found_val && static_candidate_idx != not_found_val {
             return (false, true, static_candidate_idx);
         }
-        (ret.0, false, ret.1) // (false, false, (1 << 32 - 1)) means not found
+        (ret.0, false, ret.1) // (false, false, usize::MAX) means not found
     }
     pub fn get_from_static(&self, idx: usize) -> Result<Header, Box<dyn error::Error>> {
         if STATIC_TABLE_SIZE <= idx {

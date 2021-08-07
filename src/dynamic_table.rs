@@ -86,7 +86,7 @@ impl DynamicTable {
     }
     pub fn find_index(&self, target: &Header) -> (bool, usize) {
         // TODO: really bad design due to linked list
-        let mut candidate_idx = (1 << 32) - 1;
+        let mut candidate_idx = usize::MAX;
         if self.current_size == 0 {
             return (false, candidate_idx);
         }

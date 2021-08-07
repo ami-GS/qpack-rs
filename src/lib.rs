@@ -37,14 +37,14 @@ impl Qpack {
                     Box<dyn error::Error>> {
         for header in &headers {
             let (both_match, on_static, idx) = self.table.find_index(header);
-            let idx = if idx != (1 << 32) - 1 && !on_static {
+            let idx = if idx != usize::MAX && !on_static {
                 // absolute to relative (against 0) conversion
                 self.table.get_insert_count() - 1 - idx
             } else { idx };
 
             if both_match && !on_static {
                 Encoder::duplicate(encoded, idx)?;
-            } else if idx != (1 << 32) - 1 {
+            } else if idx != usize::MAX {
                 Encoder::insert_with_name_reference(encoded, on_static, idx, &header.1, use_huffman)?;
             } else {
                 Encoder::insert_with_literal_name(encoded, &header.0, &header.1, use_huffman)?;
@@ -117,7 +117,7 @@ impl Qpack {
         let mut min_max = (usize::MAX, usize::MIN);
         for i in 0..find_index_results.len() {
             let result = &find_index_results[i];
-            if result.1 {
+            if result.1 || result.2 == usize::MAX {
                 continue;
             }
             if result.2 < min_max.0 {
@@ -127,6 +127,10 @@ impl Qpack {
                 min_max.1 = result.2;
             }
         }
+        if min_max == (usize::MAX, usize::MIN) {
+            return (0, false, 0);
+        }
+
         let required_insert_count = min_max.1 + 1;
         let post_base = ((min_max.0 + min_max.1) / 2) < self.table.get_insert_count() / 2;
         (
@@ -168,7 +172,7 @@ impl Qpack {
                         Encoder::indexed(encoded, base - idx as u32 - 1, false);
                     }
                 }
-            } else if idx != (1 << 32) - 1 {
+            } else if idx != usize::MAX {
                 if on_static {
                     Encoder::literal_name_reference(encoded, idx as u32, &header.1, true, use_huffman);
                 } else {
