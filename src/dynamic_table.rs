@@ -1,17 +1,13 @@
-use std::{collections::LinkedList, error, sync::{Arc, Condvar, Mutex}};
+use std::{collections::VecDeque, error, sync::{Arc, Condvar, Mutex}};
 
 use crate::{EncoderStreamError, Header};
 
 pub struct Entry {
-    pub header: Header,
-    // Absolute index
-    _index: usize,
+    header: Box<Header>,
+    size: usize,
 }
 pub struct DynamicTable {
-    // TODO: linked list is not appropriate.
-    //       relative index access should not care about evicted entries.
-    //       so start from begin/end could not access appropriate entry
-    pub list: LinkedList<Entry>,
+    pub list: VecDeque<Entry>,
     pub current_size: usize,
     pub capacity: usize,
     // # 2.1.4
@@ -25,7 +21,7 @@ pub struct DynamicTable {
 impl DynamicTable {
     pub fn new(max_capacity: usize, cv: Arc<(Mutex<usize>, Condvar)>) -> Self {
         Self {
-            list: LinkedList::new(),
+            list: VecDeque::<Entry>::new(),
             current_size: 0,
             capacity: 0,
             known_received_count: 0,
@@ -46,27 +42,23 @@ impl DynamicTable {
     pub fn ack_section(&mut self, section: usize) {
         self.known_received_count = section;
     }
-    fn evict_upto(&mut self, upto: usize) -> Result<(), Box<dyn error::Error>> {
+    fn evict_upto(&mut self, upto: usize) -> Result<(), Box<dyn error::Error>>{
         let mut current_size = self.current_size;
         let mut idx = 0;
-        for elm in self.list.iter() {
+        while upto < current_size {
             if self.known_received_count < idx {
                 // trying to evict non-evictable entry
-                return Err(EncoderStreamError.into());
+                return Err(EncoderStreamError.into())
             }
-            if current_size <= upto {
-                break;
-            }
-            current_size -= elm.header.0.len() + elm.header.1.len() + 32;
+            let header = &self.list[idx];
+            current_size -= header.size;
             idx += 1;
         }
-
         while idx > 0 {
             self.list.pop_front();
             idx -= 1;
         }
         self.current_size = current_size;
-
         Ok(())
     }
     pub fn dump_entries(&self) {
@@ -74,7 +66,7 @@ impl DynamicTable {
         let insert_count = self.get_insert_count();
         println!("Insert Count:{}, Current Size: {}", insert_count, self.current_size);
         let mut idx = insert_count-1;
-        for entry in self.list.iter() {
+        for entry in self.list.iter().rev() {
             if idx + 1 == self.known_received_count {
                 println!("v-------- acked sections --------v");
             }
@@ -91,36 +83,29 @@ impl DynamicTable {
             return (false, candidate_idx);
         }
         // relative from base opposit end
-        let mut abs_idx = 0;
-        let mut both_found = false;
-        for entry in self.list.iter() {
+        let mut abs_idx = self.list.len();
+        for entry in self.list.iter().rev() {
             if entry.header.0.eq(&target.0) {
                 if entry.header.1.eq(&target.1) {
-                    both_found |= true;
-                    candidate_idx = abs_idx;
-                    // INFO: the reason why not return quickly is because this loop is
-                    //       traversing in opposit direction. need to fix design
-                    //return (true, abs_idx);
+                    return (true, abs_idx-1);
                 }
-                if !both_found {
-                    candidate_idx = abs_idx;
+                if candidate_idx == usize::MAX {
+                    candidate_idx = abs_idx-1;
                 }
             }
-            abs_idx += 1;
+            abs_idx -= 1;
         }
-        (both_found, candidate_idx)
+        (false, candidate_idx)
     }
+    // TODO: insert to diverse for each type (ref, copy etc.)
     pub fn insert(&mut self, header: Header) -> Result<(), Box<dyn error::Error>> {
         // TODO: would be able to remove this get
-        let insert_count = self.get_insert_count();
         let size = header.0.len() + header.1.len() + 32;
         if self.capacity < size {
             return Err(EncoderStreamError.into());
         }
-        // copy before eviction to avoid referenced entry to be deleted;
-        // let dyn_header = (header.0.to_string(), header.1.to_string());
         self.evict_upto(self.capacity - size)?;
-        self.list.push_back(Entry{header: header, _index: insert_count});
+        self.list.push_back(Entry{header: Box::new(header), size: size});
 
         self.increment_insert_count();
 
@@ -128,15 +113,10 @@ impl DynamicTable {
         Ok(())
     }
     pub fn get(&self, abs_idx: usize) -> Result<Header, Box<dyn error::Error>> {
-        let mut i = 0;
-        for entry in self.list.iter() {
-            if abs_idx == i {
-                return Ok(Header::from(&entry.header.0, &entry.header.1));
-            }
-            i += 1;
+        match self.list.get(abs_idx) {
+            Some(entry) => Ok((*entry.header).clone()),
+            None => Ok(Header::from("NOT_FOUND", "NOT_FOUND"))
         }
-        // TODO: error
-        Ok(Header::from("NOT_FOUND", "NOT_FOUND"))
     }
     pub fn set_capacity(&mut self, cap: usize) -> Result<(), Box<dyn error::Error>> {
         if self.max_capacity < cap {
