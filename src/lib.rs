@@ -204,7 +204,7 @@ impl Qpack {
         // OPTIMIZE: blocked just before referencing dynamic_table is better?
         let insert_count = self.table.get_insert_count();
         if insert_count < requred_insert_count as usize {
-            if self.blocked_streams_limit == self.decoder.read().unwrap().current_blocked_streams + 1 {
+            if self.blocked_streams_limit < self.decoder.read().unwrap().current_blocked_streams + 1 {
                 return Err(DecompressionFailed.into());
             }
             self.decoder.write().unwrap().current_blocked_streams += 1;
@@ -465,6 +465,7 @@ impl Header {
 
 #[cfg(test)]
 mod tests {
+    use core::time;
     use std::{error, sync::{Arc, RwLock}, thread};
     use crate::{Header, Qpack};
 
@@ -630,6 +631,40 @@ mod tests {
         let _ = qpack.encode_set_dynamic_table_capacity(&mut encoded, 220);
         assert_eq!(encoded, vec![0x3f, 0xbd, 0x01]);
     }
+    #[test]
+    fn blocking() {
+        let table_size = 4096;
+        let qpack_encoder = Arc::new(RwLock::new(Qpack::new(1, table_size)));
+        let qpack_decoder = Arc::new(RwLock::new(Qpack::new(1, table_size)));
+        let request_headers = get_headers();
+
+        let mut encoded = vec![];
+        let commit_func = qpack_encoder.read().unwrap().encode_set_dynamic_table_capacity(&mut encoded, table_size);
+        commit(commit_func);
+        let commit_func = qpack_decoder.read().unwrap().decode_encoder_instruction(&encoded);
+        commit(commit_func);
+
+        let mut insert_headers_packet = vec![];
+        let commit_func = qpack_encoder.read().unwrap().encode_insert_headers(&mut insert_headers_packet, request_headers.clone(), false);
+        commit(commit_func);
+
+        let copied_dec = Arc::clone(&qpack_decoder);
+        let th = thread::spawn(move || {
+            let dur = time::Duration::from_secs(2);
+            thread::sleep(dur);
+            let commit_func = copied_dec.read().unwrap().decode_encoder_instruction(&insert_headers_packet);
+            commit(commit_func);
+        });
+
+        let mut encoded = vec![];
+        let commit_func = qpack_encoder.read().unwrap().encode_headers(&mut encoded, request_headers.clone(), STREAM_ID, false);
+        commit(commit_func);
+        let out = qpack_decoder.read().unwrap().decode_headers(&encoded, STREAM_ID).unwrap();
+        assert!(out.1);
+        assert_eq!(request_headers, out.0);
+        let _ = th.join();
+    }
+
     #[test]
     fn multi_threading() {
         let qpack_encoder = Qpack::new(2, 1024);
