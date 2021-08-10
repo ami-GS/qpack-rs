@@ -35,6 +35,7 @@ impl Qpack {
     pub fn encode_insert_headers(&self, encoded: &mut Vec<u8>, headers: Vec<Header>, use_huffman: bool)
         -> Result<Box<dyn FnOnce() -> Result<(), Box<dyn error::Error>>>,
                     Box<dyn error::Error>> {
+        let mut commit_funcs = vec![];
         for header in &headers {
             let (both_match, on_static, idx) = self.table.find_index(header);
             let idx = if idx != usize::MAX && !on_static {
@@ -44,19 +45,20 @@ impl Qpack {
 
             if both_match && !on_static {
                 Encoder::duplicate(encoded, idx)?;
+                commit_funcs.push(self.table.duplicate(idx)?);
             } else if idx != usize::MAX {
                 Encoder::insert_with_name_reference(encoded, on_static, idx, &header.1, use_huffman)?;
+                commit_funcs.push(self.table.insert_with_name_reference(idx, header.1.clone(), on_static)?);
             } else {
                 Encoder::insert_with_literal_name(encoded, &header.0, &header.1, use_huffman)?;
+                commit_funcs.push(self.table.insert_with_literal_name(header.0.clone(), header.1.clone())?);
             }
         }
-        let dynamic_table = Arc::clone(&self.table.dynamic_table);
         let known_sending_count = Arc::clone(&self.encoder.read().unwrap().known_sending_count);
         Ok(Box::new(move || -> Result<(), Box<dyn error::Error>> {
-            let mut locked = dynamic_table.write().unwrap();
-            let count = headers.len();
-            for header in headers {
-                locked.insert(header)?;
+            let count = commit_funcs.len();
+            for f in commit_funcs {
+                f()?;
             }
             (*known_sending_count.write().unwrap()) += count;
             Ok(())
