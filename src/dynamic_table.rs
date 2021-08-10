@@ -2,6 +2,7 @@ use std::{collections::VecDeque, error, sync::{Arc, Condvar, Mutex}};
 
 use crate::{EncoderStreamError, Header};
 
+#[derive(Clone)]
 pub struct Entry {
     header: Box<Header>,
     size: usize,
@@ -16,6 +17,12 @@ pub struct DynamicTable {
     // set by SETTINGS_QPACK_MAX_TABLE_CAPACITY in SETTINGS frame
     pub max_capacity: usize,
     cv: Arc<(Mutex<usize>, Condvar)>,
+}
+
+lazy_static! {
+    pub static ref ERROR_ENTRY: Entry = {
+        Entry{header: Header::from("NOT_FOUND", "NOT_FOUND").into(), size: 0}
+    };
 }
 
 impl DynamicTable {
@@ -97,25 +104,34 @@ impl DynamicTable {
         }
         (false, candidate_idx)
     }
-    // TODO: insert to diverse for each type (ref, copy etc.)
-    pub fn insert(&mut self, header: Header) -> Result<(), Box<dyn error::Error>> {
-        // TODO: would be able to remove this get
-        let size = header.0.len() + header.1.len() + 32;
+    pub fn insert_table_entry(&mut self, entry: Entry) -> Result<(), Box<dyn error::Error>> {
+        let size = entry.size;
         if self.capacity < size {
             return Err(EncoderStreamError.into());
         }
         self.evict_upto(self.capacity - size)?;
-        self.list.push_back(Entry{header: Box::new(header), size: size});
+        self.list.push_back(entry);
 
         self.increment_insert_count();
 
         self.current_size += size;
         Ok(())
     }
+    // TODO: insert to diverse for each type (ref, copy etc.)
+    pub fn insert_header(&mut self, header: Header) -> Result<(), Box<dyn error::Error>> {
+        let size = &header.0.len() + &header.1.len() + 32;
+        self.insert_table_entry(Entry{header: Box::new(header), size})
+    }
+    pub fn get_entry(&self, abs_idx: usize) -> Result<Entry, Box<dyn error::Error>> {
+        match self.list.get(abs_idx) {
+            Some(entry) => Ok((*entry).clone()),
+            None => Ok(ERROR_ENTRY.clone())
+        }
+    }
     pub fn get(&self, abs_idx: usize) -> Result<Header, Box<dyn error::Error>> {
         match self.list.get(abs_idx) {
             Some(entry) => Ok((*entry.header).clone()),
-            None => Ok(Header::from("NOT_FOUND", "NOT_FOUND"))
+            None => Ok(*ERROR_ENTRY.header.clone())
         }
     }
     pub fn set_capacity(&mut self, cap: usize) -> Result<(), Box<dyn error::Error>> {
