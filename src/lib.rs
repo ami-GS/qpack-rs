@@ -471,7 +471,7 @@ mod tests {
     use crate::{Header, Qpack};
 
     static STREAM_ID: u16 = 4;
-    fn get_headers() -> Vec<Header> {
+    fn get_request_headers() -> Vec<Header> {
         vec![
             Header::from(":authority", "example.com"),
             Header::from(":method", "GET"),
@@ -488,6 +488,23 @@ mod tests {
             Header::from("sec-fetch-user", "?1"),
             Header::from("upgrade-insecure-requests", "1"),
             Header::from("user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.107 Safari/537.36")
+        ]
+    }
+
+    fn get_response_headers() -> Vec<Header> {
+        vec![
+            Header::from("age", "316723"),
+            Header::from("cache-control", "max-age=604800"),
+            Header::from("content-encoding", "gzip"),
+            Header::from("content-length", "648"),
+            Header::from("content-type", "text/html; charset=UTF-8"),
+            Header::from("date", "Tue, 10 Aug 2021 06:59:14 GMT"),
+            Header::from("etag", "\"3147526947+ident+gzip\""),
+            Header::from("expires", "Tue, 17 Aug 2021 06:59:14 GMT"),
+            Header::from("last-modified", "Thu, 17 Oct 2019 07:18:26 GMT"),
+            Header::from("server", "ECS (sab/5708)"),
+            Header::from("vary", "Accept-Encoding"),
+            Header::from("x-cache", "HIT"),
         ]
     }
 
@@ -532,7 +549,7 @@ mod tests {
         let qpack_encoder = Qpack::new(1, 1024);
         let qpack_decoder = Qpack::new(1, 1024);
         let mut encoded = vec![];
-        let request_headers = get_headers();
+        let request_headers = get_request_headers();
         let commit_func = qpack_encoder.encode_headers(&mut encoded, request_headers.clone(), STREAM_ID, false);
         commit(commit_func);
         let out = qpack_decoder.decode_headers(&encoded, STREAM_ID).unwrap();
@@ -546,7 +563,7 @@ mod tests {
         let qpack_encoder = Qpack::new(1, table_size);
         let qpack_decoder = Qpack::new(1, table_size);
         let mut encoded = vec![];
-        let request_headers = get_headers();
+        let request_headers = get_request_headers();
         let commit_func = qpack_encoder.encode_set_dynamic_table_capacity(&mut encoded, table_size);
         commit(commit_func);
         let commit_func = qpack_encoder.encode_insert_headers(&mut encoded, request_headers.clone(), true);
@@ -562,7 +579,7 @@ mod tests {
         let table_size = 4096;
         let qpack_encoder = Qpack::new(1, table_size);
         let qpack_decoder = Qpack::new(1, table_size);
-        let request_headers = get_headers();
+        let request_headers = get_request_headers();
         {
             let mut encoded = vec![];
             let commit_func = qpack_encoder.encode_set_dynamic_table_capacity(&mut encoded, table_size);
@@ -581,6 +598,57 @@ mod tests {
             assert!(out.1);
             assert_eq!(request_headers, out.0);
         }
+    }
+
+    #[test]
+    fn request_response() {
+        let table_size = 2048;
+        let qpack_client = Qpack::new(1, table_size);
+        let qpack_server = Qpack::new(1, table_size);
+
+        let f = |encoder: &Qpack, decoder: &Qpack, headers: Vec<Header>| {
+            // insert headers
+            let mut encoded = vec![];
+            let commit_func = encoder.encode_insert_headers(&mut encoded, headers.clone(), false);
+            commit(commit_func);
+            let commit_func = decoder.decode_encoder_instruction(&encoded);
+            commit(commit_func);
+
+            // send headers
+            let mut refer_dynamic_table = false;
+            let mut encoded = vec![];
+            let commit_func = encoder.encode_headers(&mut encoded, headers.clone(), STREAM_ID, false);
+            commit(commit_func);
+            let out = decoder.decode_headers(&encoded, STREAM_ID).unwrap();
+            refer_dynamic_table = out.1;
+            assert!(refer_dynamic_table);
+            assert_eq!(headers, out.0);
+
+            // section ackowledgment
+            if refer_dynamic_table {
+                let mut encoded = vec![];
+                let commit_func = decoder.encode_section_ackowledgment(&mut encoded, STREAM_ID);
+                commit(commit_func);
+                let commit_func = encoder.decode_decoder_instruction(&encoded);
+                commit(commit_func);
+            }
+            encoder.dump_dynamic_table();
+            decoder.dump_dynamic_table();
+        };
+
+        // set table capacity
+        let mut encoded = vec![];
+        let commit_func = qpack_client.encode_set_dynamic_table_capacity(&mut encoded, table_size);
+        commit(commit_func);
+        let commit_func = qpack_server.decode_encoder_instruction(&encoded);
+        commit(commit_func);
+
+        println!("Client -> Server");
+        let request_headers = get_request_headers();
+        f(&qpack_client, &qpack_server, request_headers);
+        println!("Client <- Server");
+        let response_headers = get_response_headers();
+        f(&qpack_server, &qpack_client, response_headers);
     }
 
 	#[test]
