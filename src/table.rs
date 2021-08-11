@@ -105,6 +105,9 @@ impl Table {
     pub fn get_insert_count(&self) -> usize {
         self.dynamic_table.read().unwrap().get_insert_count()
     }
+    pub fn get_dynamic_table_entry_len(&self) -> usize {
+        self.dynamic_table.read().unwrap().get_entry_len()
+    }
     pub fn dump_dynamic_table(&self) {
         self.dynamic_table.read().unwrap().dump_entries();
     }

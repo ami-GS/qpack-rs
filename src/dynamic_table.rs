@@ -40,6 +40,9 @@ impl DynamicTable {
         let (mux, _) = &*self.cv;
         *mux.lock().unwrap()
     }
+    pub fn get_entry_len(&self) -> usize {
+        self.list.len()
+    }
     fn increment_insert_count(&mut self) {
         let (mux, cv) = &*self.cv;
         let mut insert_count = mux.lock().unwrap();
