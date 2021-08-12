@@ -1,7 +1,7 @@
 use std::error;
 use std::sync::{Arc, Condvar, Mutex, RwLock};
 
-use crate::dynamic_table::DynamicTable;
+use crate::dynamic_table::{DynamicTable, Entry};
 use crate::{DecompressionFailed, Header, StrHeader};
 
 pub struct Table {
@@ -41,19 +41,24 @@ impl Table {
         }
         (ret.0, false, ret.1) // (false, false, usize::MAX) means not found
     }
-    pub fn get_from_static(&self, idx: usize) -> Result<Header, Box<dyn error::Error>> {
+    pub fn get_header_from_static(&self, idx: usize) -> Result<Header, Box<dyn error::Error>> {
         if STATIC_TABLE_SIZE <= idx {
             return Err(DecompressionFailed.into());
         }
         Ok(Header::from_str_header(STATIC_TABLE[idx]))
     }
-    pub fn get_from_dynamic(&self, base: usize, idx: usize, post_base: bool) -> Result<Header, Box<dyn error::Error>> {
-        let idx = if post_base {
+    fn calc_abs_index(&self, base: usize, idx: usize, post_base: bool) -> usize {
+        if post_base {
             base + idx
         } else {
             base - idx - 1
-        };
-        self.dynamic_table.read().unwrap().get(idx)
+        }
+    }
+    pub fn get_header_from_dynamic(&self, base: usize, idx: usize, post_base: bool) -> Result<Header, Box<dyn error::Error>> {
+        self.dynamic_table.read().unwrap().get(self.calc_abs_index(base, idx, post_base))
+    }
+    pub fn get_entry_from_dynamic(&self, base: usize, idx: usize, post_base: bool) -> Result<Entry, Box<dyn error::Error>> {
+        self.dynamic_table.read().unwrap().get_entry(self.calc_abs_index(base, idx, post_base))
     }
     pub fn set_dynamic_table_capacity(&self, capacity: usize)
         -> Result<Box<dyn FnOnce() -> Result<(), Box<dyn error::Error>>>,
@@ -67,13 +72,13 @@ impl Table {
         -> Result<Box<dyn FnOnce() -> Result<(), Box<dyn error::Error>>>,
                     Box<dyn error::Error>> {
         let name = if on_static {
-            self.get_from_static(idx)?.0.to_string()
+            self.get_header_from_static(idx)?.0.to_string()
         } else {
-            self.get_from_dynamic(self.get_insert_count(), idx, false)?.0
+            self.get_header_from_dynamic(self.get_insert_count(), idx, false)?.0
         };
         let dynamic_table = Arc::clone(&self.dynamic_table);
         Ok(Box::new(move || -> Result<(), Box<dyn error::Error>> {
-            dynamic_table.write().unwrap().insert(Header::from_string(name, value))
+            dynamic_table.write().unwrap().insert_header(Header::from_string(name, value))
         }))
     }
     pub fn insert_with_literal_name(&self, name: String, value: String)
@@ -81,16 +86,17 @@ impl Table {
                     Box<dyn error::Error>> {
         let dynamic_table = Arc::clone(&self.dynamic_table);
         Ok(Box::new(move || -> Result<(), Box<dyn error::Error>> {
-            dynamic_table.write().unwrap().insert(Header::from_string(name, value))
+            dynamic_table.write().unwrap().insert_header(Header::from_string(name, value))
         }))
     }
+    // TODO: Box not for Header, but for each of key and value.
     pub fn duplicate(&self, idx: usize)
         -> Result<Box<dyn FnOnce() -> Result<(), Box<dyn error::Error>>>,
                     Box<dyn error::Error>> {
-        let header = self.get_from_dynamic(self.get_insert_count(), idx, false)?;
+        let entry = self.get_entry_from_dynamic(self.get_insert_count(), idx, false)?;
         let dynamic_table = Arc::clone(&self.dynamic_table);
         Ok(Box::new(move || -> Result<(), Box<dyn error::Error>> {
-            dynamic_table.write().unwrap().insert(header)
+            dynamic_table.write().unwrap().insert_table_entry(entry)
         }))
     }
     pub fn get_max_entries(&self) -> u32 {
@@ -98,6 +104,9 @@ impl Table {
     }
     pub fn get_insert_count(&self) -> usize {
         self.dynamic_table.read().unwrap().get_insert_count()
+    }
+    pub fn get_dynamic_table_entry_len(&self) -> usize {
+        self.dynamic_table.read().unwrap().get_entry_len()
     }
     pub fn dump_dynamic_table(&self) {
         self.dynamic_table.read().unwrap().dump_entries();

@@ -35,6 +35,7 @@ impl Qpack {
     pub fn encode_insert_headers(&self, encoded: &mut Vec<u8>, headers: Vec<Header>, use_huffman: bool)
         -> Result<Box<dyn FnOnce() -> Result<(), Box<dyn error::Error>>>,
                     Box<dyn error::Error>> {
+        let mut commit_funcs = vec![];
         for header in &headers {
             let (both_match, on_static, idx) = self.table.find_index(header);
             let idx = if idx != usize::MAX && !on_static {
@@ -44,19 +45,20 @@ impl Qpack {
 
             if both_match && !on_static {
                 Encoder::duplicate(encoded, idx)?;
+                commit_funcs.push(self.table.duplicate(idx)?);
             } else if idx != usize::MAX {
                 Encoder::insert_with_name_reference(encoded, on_static, idx, &header.1, use_huffman)?;
+                commit_funcs.push(self.table.insert_with_name_reference(idx, header.1.clone(), on_static)?);
             } else {
                 Encoder::insert_with_literal_name(encoded, &header.0, &header.1, use_huffman)?;
+                commit_funcs.push(self.table.insert_with_literal_name(header.0.clone(), header.1.clone())?);
             }
         }
-        let dynamic_table = Arc::clone(&self.table.dynamic_table);
         let known_sending_count = Arc::clone(&self.encoder.read().unwrap().known_sending_count);
         Ok(Box::new(move || -> Result<(), Box<dyn error::Error>> {
-            let mut locked = dynamic_table.write().unwrap();
-            let count = headers.len();
-            for header in headers {
-                locked.insert(header)?;
+            let count = commit_funcs.len();
+            for f in commit_funcs {
+                f()?;
             }
             (*known_sending_count.write().unwrap()) += count;
             Ok(())
@@ -130,9 +132,13 @@ impl Qpack {
         if min_max == (usize::MAX, usize::MIN) {
             return (0, false, 0);
         }
+        let insert_count = self.table.get_insert_count();
+        let entry_len = self.table.get_dynamic_table_entry_len();
+        let evicted_count = insert_count - entry_len;
 
-        let required_insert_count = min_max.1 + 1;
-        let post_base = ((min_max.0 + min_max.1) / 2) < self.table.get_insert_count() / 2;
+        let required_insert_count = min_max.1 + 1 + evicted_count;
+        // WARN: if min_max uses abs_index, entry_len to be insert_count
+        let post_base = ((min_max.0 + min_max.1) / 2) < entry_len / 2;
         (
             required_insert_count,
             post_base,
@@ -147,6 +153,9 @@ impl Qpack {
         let mut find_index_results = vec![];
         let mut refer_dynamic_table = false;
         for header in &headers {
+            // TODO: currently find_index from dynamic table returns index from 0.
+            //       if it returns absolute index, do not need to calculate evicted_count
+            //       in get_prefix_meta_data
             let result = self.table.find_index(header);
             refer_dynamic_table |= !result.1;
             find_index_results.push(result);
@@ -470,7 +479,7 @@ mod tests {
     use crate::{Header, Qpack};
 
     static STREAM_ID: u16 = 4;
-    fn get_headers() -> Vec<Header> {
+    fn get_request_headers() -> Vec<Header> {
         vec![
             Header::from(":authority", "example.com"),
             Header::from(":method", "GET"),
@@ -487,6 +496,23 @@ mod tests {
             Header::from("sec-fetch-user", "?1"),
             Header::from("upgrade-insecure-requests", "1"),
             Header::from("user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.107 Safari/537.36")
+        ]
+    }
+
+    fn get_response_headers() -> Vec<Header> {
+        vec![
+            Header::from("age", "316723"),
+            Header::from("cache-control", "max-age=604800"),
+            Header::from("content-encoding", "gzip"),
+            Header::from("content-length", "648"),
+            Header::from("content-type", "text/html; charset=UTF-8"),
+            Header::from("date", "Tue, 10 Aug 2021 06:59:14 GMT"),
+            Header::from("etag", "\"3147526947+ident+gzip\""),
+            Header::from("expires", "Tue, 17 Aug 2021 06:59:14 GMT"),
+            Header::from("last-modified", "Thu, 17 Oct 2019 07:18:26 GMT"),
+            Header::from("server", "ECS (sab/5708)"),
+            Header::from("vary", "Accept-Encoding"),
+            Header::from("x-cache", "HIT"),
         ]
     }
 
@@ -531,7 +557,7 @@ mod tests {
         let qpack_encoder = Qpack::new(1, 1024);
         let qpack_decoder = Qpack::new(1, 1024);
         let mut encoded = vec![];
-        let request_headers = get_headers();
+        let request_headers = get_request_headers();
         let commit_func = qpack_encoder.encode_headers(&mut encoded, request_headers.clone(), STREAM_ID, false);
         commit(commit_func);
         let out = qpack_decoder.decode_headers(&encoded, STREAM_ID).unwrap();
@@ -545,7 +571,7 @@ mod tests {
         let qpack_encoder = Qpack::new(1, table_size);
         let qpack_decoder = Qpack::new(1, table_size);
         let mut encoded = vec![];
-        let request_headers = get_headers();
+        let request_headers = get_request_headers();
         let commit_func = qpack_encoder.encode_set_dynamic_table_capacity(&mut encoded, table_size);
         commit(commit_func);
         let commit_func = qpack_encoder.encode_insert_headers(&mut encoded, request_headers.clone(), true);
@@ -561,7 +587,7 @@ mod tests {
         let table_size = 4096;
         let qpack_encoder = Qpack::new(1, table_size);
         let qpack_decoder = Qpack::new(1, table_size);
-        let request_headers = get_headers();
+        let request_headers = get_request_headers();
         {
             let mut encoded = vec![];
             let commit_func = qpack_encoder.encode_set_dynamic_table_capacity(&mut encoded, table_size);
@@ -580,6 +606,57 @@ mod tests {
             assert!(out.1);
             assert_eq!(request_headers, out.0);
         }
+    }
+
+    #[test]
+    fn request_response() {
+        let table_size = 2048;
+        let qpack_client = Qpack::new(1, table_size);
+        let qpack_server = Qpack::new(1, table_size);
+
+        let f = |encoder: &Qpack, decoder: &Qpack, headers: Vec<Header>| {
+            // insert headers
+            let mut encoded = vec![];
+            let commit_func = encoder.encode_insert_headers(&mut encoded, headers.clone(), false);
+            commit(commit_func);
+            let commit_func = decoder.decode_encoder_instruction(&encoded);
+            commit(commit_func);
+
+            // send headers
+            let mut refer_dynamic_table = false;
+            let mut encoded = vec![];
+            let commit_func = encoder.encode_headers(&mut encoded, headers.clone(), STREAM_ID, false);
+            commit(commit_func);
+            let out = decoder.decode_headers(&encoded, STREAM_ID).unwrap();
+            refer_dynamic_table = out.1;
+            assert!(refer_dynamic_table);
+            assert_eq!(headers, out.0);
+
+            // section ackowledgment
+            if refer_dynamic_table {
+                let mut encoded = vec![];
+                let commit_func = decoder.encode_section_ackowledgment(&mut encoded, STREAM_ID);
+                commit(commit_func);
+                let commit_func = encoder.decode_decoder_instruction(&encoded);
+                commit(commit_func);
+            }
+            encoder.dump_dynamic_table();
+            decoder.dump_dynamic_table();
+        };
+
+        // set table capacity
+        let mut encoded = vec![];
+        let commit_func = qpack_client.encode_set_dynamic_table_capacity(&mut encoded, table_size);
+        commit(commit_func);
+        let commit_func = qpack_server.decode_encoder_instruction(&encoded);
+        commit(commit_func);
+
+        println!("Client -> Server");
+        let request_headers = get_request_headers();
+        f(&qpack_client, &qpack_server, request_headers);
+        println!("Client <- Server");
+        let response_headers = get_response_headers();
+        f(&qpack_server, &qpack_client, response_headers);
     }
 
 	#[test]
