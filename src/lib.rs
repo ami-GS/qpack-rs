@@ -183,16 +183,16 @@ impl Qpack {
                 }
             } else if idx != usize::MAX {
                 if on_static {
-                    Encoder::literal_name_reference(encoded, idx as u32, &header.1, true, use_huffman);
+                    Encoder::literal_name_reference(encoded, idx as u32, &header.1, true, use_huffman)?;
                 } else {
                     if post_base {
-                        Encoder::literal_post_base_name_reference(encoded, idx as u32, &header.1, use_huffman);
+                        Encoder::literal_post_base_name_reference(encoded, idx as u32, &header.1, use_huffman)?;
                     } else {
-                        Encoder::literal_name_reference(encoded, base - idx as u32 - 1, &header.1, false, use_huffman);
+                        Encoder::literal_name_reference(encoded, base - idx as u32 - 1, &header.1, false, use_huffman)?;
                     }
                 }
             } else { // not found
-                Encoder::literal_literal_name(encoded, &header, use_huffman);
+                Encoder::literal_literal_name(encoded, &header, use_huffman)?;
             }
         }
         let encoder = Arc::clone(&self.encoder);

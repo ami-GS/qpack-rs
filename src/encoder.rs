@@ -155,7 +155,7 @@ impl Encoder {
         value: &str,
         from_static: bool,
         use_huffman: bool
-    ) {
+    ) -> Result<usize, Box<dyn error::Error>> {
         // TODO: "N" bit?
         let len = Qnum::encode(encoded, idx, 4);
         let wire_len = encoded.len();
@@ -164,21 +164,22 @@ impl Encoder {
             let wire_len = encoded.len();
             encoded[wire_len - len] |= 0b00010000;
         }
-        // TODO: error handling
-        Encoder::pack_string(encoded, value, 7, use_huffman);
+        Encoder::pack_string(encoded, value, 7, use_huffman)
     }
-    pub fn literal_post_base_name_reference(encoded: &mut Vec<u8>, idx: u32, value: &str, use_huffman: bool) {
+    pub fn literal_post_base_name_reference(encoded: &mut Vec<u8>, idx: u32, value: &str, use_huffman: bool)
+        -> Result<usize, Box<dyn error::Error>> {
         // TODO: "N" bit?
         let len = Qnum::encode(encoded, idx, 3);
         let wire_len = encoded.len();
         encoded[wire_len - len] |= FieldType::LITERAL_POST_BASE_NAME_REFERENCE;
-        Encoder::pack_string(encoded, value, 7, use_huffman);
+        Encoder::pack_string(encoded, value, 7, use_huffman)
     }
-    pub fn literal_literal_name(encoded: &mut Vec<u8>, header: &Header, use_huffman: bool) {
+    pub fn literal_literal_name(encoded: &mut Vec<u8>, header: &Header, use_huffman: bool)
+        -> Result<usize, Box<dyn error::Error>>{
         // TODO: "N"?
         let len = Encoder::pack_string(encoded, &header.0, 3, use_huffman).unwrap();
         let wire_len  = encoded.len();
         encoded[wire_len - len] |= FieldType::LITERAL_LITERAL_NAME;
-        Encoder::pack_string(encoded, &header.1, 7, use_huffman);
+        Encoder::pack_string(encoded, &header.1, 7, use_huffman)
     }
 }
