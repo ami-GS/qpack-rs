@@ -1,7 +1,8 @@
 use std::{collections::HashMap, error};
 
-use crate::{DecompressionFailed, Header, Qnum, table::Table};
-use crate::huffman::HUFFMAN_TRANSFORMER;
+use crate::{DecompressionFailed, Header, table::Table};
+use crate::transformer::huffman::HUFFMAN_TRANSFORMER;
+use crate::transformer::qnum::Qnum;
 
 pub struct Instruction;
 impl Instruction {

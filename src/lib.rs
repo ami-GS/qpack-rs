@@ -1,17 +1,14 @@
-use crate::decoder::Decoder;
-use crate::encoder::Encoder;
+mod transformer;
+mod table;
+
+use crate::transformer::decoder::{self, Decoder};
+use crate::transformer::encoder::{self, Encoder};
 use crate::table::Table;
 use core::fmt;
 use std::error;
 use std::sync::{Arc, Condvar, Mutex, RwLock};
 #[macro_use]
 extern crate lazy_static;
-
-mod decoder;
-mod dynamic_table;
-mod encoder;
-mod table;
-mod huffman;
 
 pub struct Qpack {
     encoder: Arc<RwLock<Encoder>>,
@@ -77,7 +74,6 @@ impl Qpack {
         -> Result<Box<dyn FnOnce() -> Result<(), Box<dyn error::Error>>>,
                     Box<dyn error::Error>> {
         Decoder::section_ackowledgment(encoded, stream_id)?;
-
         let decoder = Arc::clone(&self.decoder);
         let dynamic_table = Arc::clone(&self.table.dynamic_table);
         Ok(Box::new(move || -> Result<(), Box<dyn error::Error>> {
@@ -340,48 +336,6 @@ impl Qpack {
     }
 }
 
-struct Qnum;
-impl Qnum {
-    pub fn encode(encoded: &mut Vec<u8>, val: u32, n: u8) -> usize {
-		let mut val = val;
-        let mut len = 1;
-        let mask: u8 = if n == 8 {
-            0xff
-        } else {
-            (1 << n) - 1
-        };
-        if val < mask as u32 {
-            encoded.push(val as u8);
-            return len;
-        }
-
-        encoded.push(mask);
-        val -= mask as u32;
-        while val >= 128 {
-            encoded.push(((val & 0b01111111) | 0b10000000) as u8);
-            val = val >> 7;
-            len += 1;
-        }
-        encoded.push(val as u8);
-        return len + 1;
-    }
-    pub fn decode(encoded: &Vec<u8>, idx: usize, n: u8) -> (usize, u32) {
-        let mask: u16 = (1 << n) - 1;
-        let mut val: u32 = (encoded[idx] & mask as u8) as u32;
-        let mut next = val as u16 == mask;
-
-        let mut len = 1;
-        let mut m = 0;
-        while next {
-            val += ((encoded[idx + len] & 0b01111111) as u32) << m;
-            next = encoded[idx + len] & 0b10000000 == 0b10000000;
-            m += 7;
-            len += 1;
-        }
-        (len, val)
-    }
-}
-
 struct FieldType;
 impl FieldType {
     // 4.5.2
@@ -597,22 +551,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn qnum_encode_decode() {
-        let mut values: Vec<u32> = (0..(u16::MAX as u32 * 2)).collect();
-        values.push(u32::MAX);
-        values.push(u32::MAX-1);
-
-        for i in values {
-            for j in 1..=8 {
-                let mut encoded = vec![];
-                let len = crate::Qnum::encode(&mut encoded, i, j);
-                let out = crate::Qnum::decode(&encoded, 0, j);
-                assert_eq!(i, out.1);
-                assert_eq!(len, out.0);
-            }
-        }
-    }
     #[test]
     fn simple_get() {
         let (qpack_encoder, qpack_decoder) = gen_client_server_instances(1, 1024);

@@ -2,9 +2,9 @@ use std::collections::HashMap;
 use std::error;
 use std::sync::{Arc, RwLock};
 
-use crate::huffman::HUFFMAN_TRANSFORMER;
-use crate::{table::Table, Header};
-use crate::{FieldType, Qnum};
+use crate::{FieldType, table::Table, Header};
+use crate::transformer::huffman::HUFFMAN_TRANSFORMER;
+use crate::transformer::qnum::Qnum;
 
 pub struct Instruction;
 impl Instruction {

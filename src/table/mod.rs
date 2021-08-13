@@ -1,8 +1,11 @@
+mod dynamic_table;
+
 use std::error;
 use std::sync::{Arc, Condvar, Mutex, RwLock};
 
-use crate::dynamic_table::{DynamicTable, Entry};
 use crate::{DecompressionFailed, Header, StrHeader};
+
+use self::dynamic_table::{DynamicTable, Entry};
 
 pub struct Table {
     pub dynamic_table: Arc<RwLock<DynamicTable>>,

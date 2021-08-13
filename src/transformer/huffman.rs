@@ -15,7 +15,7 @@ pub struct Node {
 	ascii: u16,
 }
 pub struct HuffmanTransformer {
-	root: Box<Node>,
+	_root: Box<Node>,
 	dict: HashMap<(u32, u8), u16>
 }
 impl HuffmanTransformer {
@@ -50,7 +50,7 @@ impl HuffmanTransformer {
 	}
 	pub fn new() -> Self {
 		Self {
-			root: HuffmanTransformer::build_tree(),
+			_root: HuffmanTransformer::build_tree(),
 			dict: HuffmanTransformer::build_map(),
 		}
 	}
@@ -87,9 +87,9 @@ impl HuffmanTransformer {
     }
 
     // TODO: fix
-    pub fn decode_by_tree(&self, wire: &Vec<u8>, idx: usize, str_len: usize) -> Result<String, Box<dyn error::Error>> {
+    pub fn _decode_by_tree(&self, wire: &Vec<u8>, idx: usize, str_len: usize) -> Result<String, Box<dyn error::Error>> {
         let mut value = String::new();
-        let mut p = self.root.clone();
+        let mut p = self._root.clone();
 		for i in 0..str_len {
 			for j in (0..8).rev() {
 				// TODO: error if right/left is None
@@ -102,7 +102,7 @@ impl HuffmanTransformer {
 				if p.ascii != u16::MAX {
 					// TODO: cast should be slow. use flag when to build tree?
 					value.push((p.ascii as u8) as char);
-					p = self.root.clone();
+					p = self._root.clone();
 				}
 			}
 		}
@@ -403,7 +403,7 @@ const HUFFMAN_TABLE: [HuffmanCode; HUFFMAN_TABLE_SIZE] = [
 
 #[cfg(test)]
 mod tests {
-	use crate::huffman::HUFFMAN_TRANSFORMER;
+	use crate::transformer::huffman::HUFFMAN_TRANSFORMER;
 	#[test]
 	fn encode_decode() {
 		let values = vec![
