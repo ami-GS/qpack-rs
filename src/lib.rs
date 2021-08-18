@@ -424,6 +424,9 @@ impl Header {
     pub fn from_str_header(header: StrHeader) -> Self {
         Self(header.0.to_string(), header.1.to_string())
     }
+    pub fn size(&self) -> usize {
+        self.0.len() + self.1.len() + 32
+    }
 }
 
 #[cfg(test)]

@@ -122,7 +122,7 @@ impl DynamicTable {
     }
     // TODO: insert to diverse for each type (ref, copy etc.)
     pub fn insert_header(&mut self, header: Header) -> Result<(), Box<dyn error::Error>> {
-        let size = &header.0.len() + &header.1.len() + 32;
+        let size = header.size();
         self.insert_table_entry(Entry{header: Box::new(header), size})
     }
     pub fn get_entry(&self, abs_idx: usize) -> Result<Entry, Box<dyn error::Error>> {
