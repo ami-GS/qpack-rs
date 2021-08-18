@@ -429,7 +429,7 @@ impl Header {
 #[cfg(test)]
 mod tests {
     use core::time;
-    use std::{error, sync::{Arc, RwLock}, thread};
+    use std::{error, sync::Arc, thread};
     use crate::{Header, Qpack};
 
     static STREAM_ID: u16 = 4;
@@ -649,12 +649,12 @@ mod tests {
     #[test]
     fn blocking() {
         let (qpack_encoder, qpack_decoder) = gen_client_server_instances(1, 4096);
-        let qpack_encoder = Arc::new(RwLock::new(qpack_encoder));
-        let qpack_decoder = Arc::new(RwLock::new(qpack_decoder));
+        let qpack_encoder = Arc::new(qpack_encoder);
+        let qpack_decoder = Arc::new(qpack_decoder);
         let request_headers = get_request_headers(false);
 
         let mut insert_headers_packet = vec![];
-        let commit_func = qpack_encoder.read().unwrap().encode_insert_headers(&mut insert_headers_packet, request_headers.clone(), false);
+        let commit_func = qpack_encoder.encode_insert_headers(&mut insert_headers_packet, request_headers.clone(), false);
         commit(commit_func);
 
         // header insertion arrives after starting decoding headers
@@ -662,13 +662,13 @@ mod tests {
         let th = thread::spawn(move || {
             let dur = time::Duration::from_secs(2);
             thread::sleep(dur);
-            let commit_func = copied_dec.read().unwrap().decode_encoder_instruction(&insert_headers_packet);
+            let commit_func = copied_dec.decode_encoder_instruction(&insert_headers_packet);
             commit(commit_func);
         });
 
-        let refer_dynamic_table = send_headers(&qpack_encoder.read().unwrap(), &qpack_decoder.read().unwrap(), request_headers);
+        let refer_dynamic_table = send_headers(&qpack_encoder, &qpack_decoder, request_headers);
         if refer_dynamic_table {
-            section_ackowledgment(&qpack_encoder.read().unwrap(), &qpack_decoder.read().unwrap());
+            section_ackowledgment(&qpack_encoder, &qpack_decoder);
         }
         let _ = th.join();
     }
@@ -676,17 +676,17 @@ mod tests {
     #[test]
     fn multi_threading() {
         let (qpack_encoder, qpack_decoder) = gen_client_server_instances(2, 1024);
-        let safe_encoder = Arc::new(RwLock::new(qpack_encoder));
-        let safe_decoder = Arc::new(RwLock::new(qpack_decoder));
+        let safe_encoder = Arc::new(qpack_encoder);
+        let safe_decoder = Arc::new(qpack_decoder);
 
         let f = |headers: Vec<Header>, stream_id: u16, expected_wire: Vec<u8>,
-                                                encoder: Arc<RwLock<Qpack>>, decoder: Arc<RwLock<Qpack>>| {
+                                                encoder: Arc<Qpack>, decoder: Arc<Qpack>| {
             let mut encoded = vec![];
-            let commit_func = encoder.read().unwrap().encode_headers(&mut encoded, headers.clone(), stream_id, false);
+            let commit_func = encoder.encode_headers(&mut encoded, headers.clone(), stream_id, false);
             commit(commit_func);
             //assert_eq!(encoded, expected_wire);
 
-            if let Ok(out) = decoder.read().unwrap().decode_headers(&encoded, stream_id) {
+            if let Ok(out) = decoder.decode_headers(&encoded, stream_id) {
                 assert_eq!(out.0, headers);
                 assert_eq!(out.1, false);
             } else {
