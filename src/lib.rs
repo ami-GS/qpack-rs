@@ -202,13 +202,14 @@ impl Qpack {
 
     pub fn decode_headers(&self, wire: &Vec<u8>, stream_id: u16) -> Result<(Vec<Header>, bool), Box<dyn error::Error>> {
         let mut idx = 0;
-        let (len, requred_insert_count, base) = Decoder::prefix(wire, idx, &self.table)?;
+        let (len, required_insert_count, base) = Decoder::prefix(wire, idx, &self.table)?;
         idx += len;
+        let required_insert_count = required_insert_count as usize;
 
         // blocked if dynamic_table.insert_count < requred_insert_count
         // OPTIMIZE: blocked just before referencing dynamic_table is better?
         let insert_count = self.table.get_insert_count();
-        if insert_count < requred_insert_count as usize {
+        if insert_count < required_insert_count {
             if self.blocked_streams_limit < self.decoder.read().unwrap().current_blocked_streams + 1 {
                 return Err(DecompressionFailed.into());
             }
@@ -216,7 +217,7 @@ impl Qpack {
 
             let (mux, cv) = &*self.cv;
             let mut locked_insert_count = mux.lock().unwrap();
-            while *locked_insert_count < requred_insert_count as usize {
+            while *locked_insert_count < required_insert_count {
                 locked_insert_count = cv.wait(locked_insert_count).unwrap();
             }
         }
@@ -226,15 +227,15 @@ impl Qpack {
         let mut ref_dynamic = false;
         while idx < wire_len {
             let ret = if wire[idx] & FieldType::INDEXED == FieldType::INDEXED {
-                Decoder::indexed(wire, &mut idx, base, &self.table)?
+                Decoder::indexed(wire, &mut idx, base, required_insert_count, &self.table)?
             } else if wire[idx] & FieldType::LITERAL_NAME_REFERENCE == FieldType::LITERAL_NAME_REFERENCE {
-                Decoder::literal_name_reference(wire, &mut idx, base, &self.table)?
+                Decoder::literal_name_reference(wire, &mut idx, base, required_insert_count, &self.table)?
             } else if wire[idx] & FieldType::LITERAL_LITERAL_NAME == FieldType::LITERAL_LITERAL_NAME {
                 Decoder::literal_literal_name(wire, &mut idx)?
             } else if wire[idx] & FieldType::INDEXED_POST_BASE_INDEX == FieldType::INDEXED_POST_BASE_INDEX {
-                Decoder::indexed_post_base_index(wire, &mut idx, base, &self.table)?
+                Decoder::indexed_post_base_index(wire, &mut idx, base, required_insert_count, &self.table)?
             } else if wire[idx] & 0b11110000 == FieldType::LITERAL_POST_BASE_NAME_REFERENCE {
-                Decoder::literal_post_base_name_reference(wire, &mut idx, base, &self.table)?
+                Decoder::literal_post_base_name_reference(wire, &mut idx, base, required_insert_count, &self.table)?
             } else {
                 return Err(DecompressionFailed.into());
             };
@@ -242,8 +243,8 @@ impl Qpack {
             ref_dynamic |= ret.1;
         }
         // ?
-        if requred_insert_count != 0 {
-            self.decoder.write().unwrap().add_section(stream_id, requred_insert_count as usize);
+        if required_insert_count != 0 {
+            self.decoder.write().unwrap().add_section(stream_id, required_insert_count);
         }
         Ok((headers, ref_dynamic))
     }

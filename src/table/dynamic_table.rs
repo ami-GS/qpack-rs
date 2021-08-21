@@ -1,6 +1,6 @@
 use std::{collections::VecDeque, error, sync::{Arc, Condvar, Mutex}};
 
-use crate::{EncoderStreamError, Header};
+use crate::{DecompressionFailed, EncoderStreamError, Header};
 
 #[derive(Clone)]
 pub struct Entry {
@@ -134,7 +134,7 @@ impl DynamicTable {
     pub fn get(&self, abs_idx: usize) -> Result<Header, Box<dyn error::Error>> {
         match self.list.get(abs_idx) {
             Some(entry) => Ok((*entry.header).clone()),
-            None => Ok(*ERROR_ENTRY.header.clone())
+            None => Err(DecompressionFailed.into())
         }
     }
     pub fn set_capacity(&mut self, cap: usize) -> Result<(), Box<dyn error::Error>> {

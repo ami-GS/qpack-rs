@@ -127,29 +127,37 @@ impl Decoder {
         Ok((len1 + len2, required_insert_count, base as usize))
     }
 
-    pub fn indexed(wire: &Vec<u8>, idx: &mut usize, base: usize, table: &Table) -> Result<(Header, bool), Box<dyn error::Error>> {
+    pub fn indexed(wire: &Vec<u8>, idx: &mut usize, base: usize, required_insert_count: usize, table: &Table) -> Result<(Header, bool), Box<dyn error::Error>> {
         let from_static = wire[*idx] & 0b01000000 == 0b01000000;
         let (len, table_idx) = Qnum::decode(wire, *idx, 6);
         *idx += len;
 
+        let table_idx = table_idx as usize;
         Ok(
             if from_static {
-                (table.get_header_from_static(table_idx as usize)?, false)
+                (table.get_header_from_static(table_idx)?, false)
             } else {
-                (table.get_header_from_dynamic(base, table_idx as usize, false)?, true)
+                if required_insert_count <= table_idx {
+                    return Err(DecompressionFailed.into());
+                }
+                (table.get_header_from_dynamic(base, table_idx, false)?, true)
             }
         )
     }
 
-    pub fn literal_name_reference(wire: &Vec<u8>, idx: &mut usize, base: usize, table: &Table) -> Result<(Header, bool), Box<dyn error::Error>> {
+    pub fn literal_name_reference(wire: &Vec<u8>, idx: &mut usize, base: usize, required_insert_count: usize, table: &Table) -> Result<(Header, bool), Box<dyn error::Error>> {
         let (len, table_idx) = Qnum::decode(wire, *idx, 4);
         let from_static = wire[*idx] & 0b00010000 == 0b00010000;
         *idx += len;
 
+        let table_idx = table_idx as usize;
         let header = if from_static {
-            table.get_header_from_static(table_idx as usize)?
+            table.get_header_from_static(table_idx)?
         } else {
-            table.get_header_from_dynamic(base, table_idx as usize, false)?
+            if required_insert_count <= table_idx {
+                return Err(DecompressionFailed.into());
+            }
+            table.get_header_from_dynamic(base, table_idx, false)?
         };
         let (len, value) = Decoder::parse_string(wire, *idx, 7)?;
         *idx += len;
@@ -166,17 +174,25 @@ impl Decoder {
         Ok((Header::from_string(name, value), false))
     }
 
-    pub fn indexed_post_base_index(wire: &Vec<u8>, idx: &mut usize, base: usize, table: &Table) -> Result<(Header, bool), Box<dyn error::Error>> {
+    pub fn indexed_post_base_index(wire: &Vec<u8>, idx: &mut usize, base: usize, required_insert_count: usize, table: &Table) -> Result<(Header, bool), Box<dyn error::Error>> {
         let (len, table_idx) = Qnum::decode(wire, *idx, 4);
+        let table_idx = table_idx as usize;
+        if required_insert_count <= table_idx {
+            return Err(DecompressionFailed.into());
+        }
         *idx += len;
-        let header = table.get_header_from_dynamic(base, table_idx as usize, true)?;
+        let header = table.get_header_from_dynamic(base, table_idx, true)?;
         Ok((header, true))
     }
 
-    pub fn literal_post_base_name_reference(wire: &Vec<u8>, idx: &mut usize, base: usize, table: &Table) -> Result<(Header, bool), Box<dyn error::Error>> {
+    pub fn literal_post_base_name_reference(wire: &Vec<u8>, idx: &mut usize, base: usize, required_insert_count: usize, table: &Table) -> Result<(Header, bool), Box<dyn error::Error>> {
         let (len, table_idx) = Qnum::decode(wire, *idx, 3);
+        let table_idx = table_idx as usize;
+        if required_insert_count <= table_idx {
+            return Err(DecompressionFailed.into());
+        }
         *idx += len;
-        let header = table.get_header_from_dynamic(base, table_idx as usize, true)?;
+        let header = table.get_header_from_dynamic(base, table_idx, true)?;
         let (len, value_length) = Qnum::decode(wire, *idx, 7);
         *idx += len;
         let value = std::str::from_utf8(
