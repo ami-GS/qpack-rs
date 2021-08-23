@@ -74,15 +74,17 @@ impl Table {
     pub fn insert_with_name_reference(&self, idx: usize, value: String, on_static: bool)
         -> Result<Box<dyn FnOnce() -> Result<(), Box<dyn error::Error>>>,
                     Box<dyn error::Error>> {
-        let name = if on_static {
-            self.get_header_from_static(idx)?.0.to_string()
-        } else {
-            self.get_header_from_dynamic(self.get_insert_count(), idx, false)?.0
-        };
         let dynamic_table = Arc::clone(&self.dynamic_table);
-        Ok(Box::new(move || -> Result<(), Box<dyn error::Error>> {
-            dynamic_table.write().unwrap().insert_header(Header::from_string(name, value))
-        }))
+        if on_static {
+            let name = self.get_header_from_static(idx)?.0.to_string();
+            return Ok(Box::new(move || -> Result<(), Box<dyn error::Error>> {
+                dynamic_table.write().unwrap().insert_header(Header::from_string(name, value))
+            }));
+        }
+        let entry = self.get_entry_from_dynamic(self.get_insert_count(), idx, false)?;
+        return Ok(Box::new(move || -> Result<(), Box<dyn error::Error>> {
+            dynamic_table.write().unwrap().insert_table_entry(Entry::refer_name(entry, value))
+        }));
     }
     pub fn insert_with_literal_name(&self, name: String, value: String)
         -> Result<Box<dyn FnOnce() -> Result<(), Box<dyn error::Error>>>,
@@ -99,7 +101,7 @@ impl Table {
         let entry = self.get_entry_from_dynamic(self.get_insert_count(), idx, false)?;
         let dynamic_table = Arc::clone(&self.dynamic_table);
         Ok(Box::new(move || -> Result<(), Box<dyn error::Error>> {
-            dynamic_table.write().unwrap().insert_table_entry(entry)
+            dynamic_table.write().unwrap().insert_table_entry(Entry::duplicate(entry))
         }))
     }
     pub fn get_max_entries(&self) -> u32 {

@@ -2,11 +2,52 @@ use std::{collections::VecDeque, error, sync::{Arc, Condvar, Mutex}};
 
 use crate::{DecompressionFailed, EncoderStreamError, Header};
 
+// TODO: trait for Header and DynamicHeader
+#[derive(PartialEq, Eq, Debug, Clone)]
+pub struct DynamicHeader(Box<String>, String);
+impl DynamicHeader {
+    pub fn from(name: &str, value: &str) -> Self {
+        Self(Box::new(String::from(name)), String::from(value))
+    }
+    pub fn from_header(header: Header) -> Self {
+        Self(Box::new(header.0), header.1)
+    }
+    pub fn to_header(&self) -> Header {
+        Header(*self.0.clone(), self.1.clone())
+    }
+    pub fn size(&self) -> usize {
+        self.0.len() + self.1.len() + 32
+    }
+}
 #[derive(Clone)]
 pub struct Entry {
-    header: Box<Header>,
+    header: Box<DynamicHeader>,
     size: usize,
 }
+impl Entry {
+    pub fn new(header: Box<DynamicHeader>) -> Self {
+        let size = header.size();
+        Self {
+            header,
+            size,
+        }
+    }
+    pub fn duplicate(entry: Entry) -> Self {
+        Self {
+            header: entry.header.clone(),
+            size: entry.size,
+        }
+    }
+    pub fn refer_name(entry: Entry, value: String) -> Self {
+        let header = Box::new(DynamicHeader(entry.header.0, value));
+        let size = header.size();
+        Self {
+            header,
+            size,
+        }
+    }
+}
+
 pub struct DynamicTable {
     pub list: VecDeque<Entry>,
     pub current_size: usize,
@@ -21,7 +62,7 @@ pub struct DynamicTable {
 
 lazy_static! {
     pub static ref ERROR_ENTRY: Entry = {
-        Entry{header: Header::from("NOT_FOUND", "NOT_FOUND").into(), size: 0}
+        Entry::new(Box::new(DynamicHeader::from("NOT_FOUND", "NOT_FOUND").into()))
     };
 }
 
@@ -95,7 +136,7 @@ impl DynamicTable {
         // relative from base opposit end
         let mut abs_idx = self.list.len();
         for entry in self.list.iter().rev() {
-            if entry.header.0.eq(&target.0) {
+            if (&*entry.header.0).eq(&target.0) {
                 if entry.header.1.eq(&target.1) {
                     return (true, abs_idx-1);
                 }
@@ -122,8 +163,7 @@ impl DynamicTable {
     }
     // TODO: insert to diverse for each type (ref, copy etc.)
     pub fn insert_header(&mut self, header: Header) -> Result<(), Box<dyn error::Error>> {
-        let size = header.size();
-        self.insert_table_entry(Entry{header: Box::new(header), size})
+        self.insert_table_entry(Entry::new(Box::new(DynamicHeader::from_header(header))))
     }
     pub fn get_entry(&self, abs_idx: usize) -> Result<Entry, Box<dyn error::Error>> {
         match self.list.get(abs_idx) {
@@ -133,7 +173,7 @@ impl DynamicTable {
     }
     pub fn get(&self, abs_idx: usize) -> Result<Header, Box<dyn error::Error>> {
         match self.list.get(abs_idx) {
-            Some(entry) => Ok((*entry.header).clone()),
+            Some(entry) => Ok(entry.header.to_header()),
             None => Err(DecompressionFailed.into())
         }
     }
