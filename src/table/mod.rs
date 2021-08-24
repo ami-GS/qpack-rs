@@ -3,7 +3,8 @@ mod dynamic_table;
 use std::error;
 use std::sync::{Arc, Condvar, Mutex, RwLock};
 
-use crate::{DecompressionFailed, Header, StrHeader};
+use crate::types::StrHeader;
+use crate::{DecompressionFailed, Header};
 
 use self::dynamic_table::{DynamicTable, Entry};
 
@@ -94,7 +95,6 @@ impl Table {
             dynamic_table.write().unwrap().insert_header(Header::from_string(name, value))
         }))
     }
-    // TODO: Box not for Header, but for each of key and value.
     pub fn duplicate(&self, idx: usize)
         -> Result<Box<dyn FnOnce() -> Result<(), Box<dyn error::Error>>>,
                     Box<dyn error::Error>> {

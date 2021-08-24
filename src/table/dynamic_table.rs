@@ -1,24 +1,7 @@
-use std::{collections::VecDeque, error, sync::{Arc, Condvar, Mutex}};
+use std::{cmp::max, collections::VecDeque, error, sync::{Arc, Condvar, Mutex, RwLock}, usize::MAX};
 
-use crate::{DecompressionFailed, EncoderStreamError, Header};
+use crate::{DecompressionFailed, EncoderStreamError, Header, types::DynamicHeader};
 
-// TODO: trait for Header and DynamicHeader
-#[derive(PartialEq, Eq, Debug, Clone)]
-pub struct DynamicHeader(Box<String>, String);
-impl DynamicHeader {
-    pub fn from(name: &str, value: &str) -> Self {
-        Self(Box::new(String::from(name)), String::from(value))
-    }
-    pub fn from_header(header: Header) -> Self {
-        Self(Box::new(header.0), header.1)
-    }
-    pub fn to_header(&self) -> Header {
-        Header(*self.0.clone(), self.1.clone())
-    }
-    pub fn size(&self) -> usize {
-        self.0.len() + self.1.len() + 32
-    }
-}
 #[derive(Clone)]
 pub struct Entry {
     header: Box<DynamicHeader>,
@@ -62,7 +45,7 @@ pub struct DynamicTable {
 
 lazy_static! {
     pub static ref ERROR_ENTRY: Entry = {
-        Entry::new(Box::new(DynamicHeader::from("NOT_FOUND", "NOT_FOUND").into()))
+        Entry::new(Box::new(DynamicHeader::from_str("NOT_FOUND", "NOT_FOUND")))
     };
 }
 
@@ -163,7 +146,7 @@ impl DynamicTable {
     }
     // TODO: insert to diverse for each type (ref, copy etc.)
     pub fn insert_header(&mut self, header: Header) -> Result<(), Box<dyn error::Error>> {
-        self.insert_table_entry(Entry::new(Box::new(DynamicHeader::from_header(header))))
+        self.insert_table_entry(Entry::new(Box::new(header.into())))
     }
     pub fn get_entry(&self, abs_idx: usize) -> Result<Entry, Box<dyn error::Error>> {
         match self.list.get(abs_idx) {
@@ -173,7 +156,7 @@ impl DynamicTable {
     }
     pub fn get(&self, abs_idx: usize) -> Result<Header, Box<dyn error::Error>> {
         match self.list.get(abs_idx) {
-            Some(entry) => Ok(entry.header.to_header()),
+            Some(entry) => Ok(Header::from((*entry.header).clone())),
             None => Err(DecompressionFailed.into())
         }
     }

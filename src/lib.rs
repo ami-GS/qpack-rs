@@ -1,6 +1,8 @@
 mod transformer;
 mod table;
+mod types;
 
+use types::Header;
 use crate::transformer::decoder::{self, Decoder};
 use crate::transformer::encoder::{self, Encoder};
 use crate::table::Table;
@@ -409,26 +411,6 @@ impl fmt::Display for DecoderStreamError {
 		write!(f, "Decoder Stream Error")
 	}
 }
-// StrHeader will be implemented later once all works
-// I assume &str header's would be slow due to page fault
-type StrHeader<'a> = (&'a str, &'a str);
-#[derive(PartialEq, Eq, Debug, Clone)]
-pub struct Header(String, String);
-
-impl Header {
-    pub fn from(name: &str, value: &str) -> Self {
-        Self(String::from(name), String::from(value))
-    }
-    pub fn from_string(name: String, value: String) -> Self {
-        Self(name, value)
-    }
-    pub fn from_str_header(header: StrHeader) -> Self {
-        Self(header.0.to_string(), header.1.to_string())
-    }
-    pub fn size(&self) -> usize {
-        self.0.len() + self.1.len() + 32
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -439,21 +421,21 @@ mod tests {
     static STREAM_ID: u16 = 4;
     fn get_request_headers(remove_value: bool) -> Vec<Header> {
         let mut headers = vec![
-            Header::from(":authority", "example.com"),
-            Header::from(":method", "GET"),
-            Header::from(":path", "/"),
-            Header::from(":scheme", "https"),
-            Header::from("accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9"),
-            Header::from("accept-encoding", "gzip, deflate, br"),
-            Header::from("accept-language", "en-US,en;q=0.9"),
-            Header::from("sec-ch-ua", "\"Chromium\";v=\"92\", \" Not A;Brand\";v=\"99\", \"Google Chrome\";v=\"92\""),
-            Header::from("sec-ch-ua-mobile", "?0"),
-            Header::from("sec-fetch-dest", "document"),
-            Header::from("sec-fetch-mode", "navigate"),
-            Header::from("sec-fetch-site", "none"),
-            Header::from("sec-fetch-user", "?1"),
-            Header::from("upgrade-insecure-requests", "1"),
-            Header::from("user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.107 Safari/537.36")
+            Header::from_str(":authority", "example.com"),
+            Header::from_str(":method", "GET"),
+            Header::from_str(":path", "/"),
+            Header::from_str(":scheme", "https"),
+            Header::from_str("accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9"),
+            Header::from_str("accept-encoding", "gzip, deflate, br"),
+            Header::from_str("accept-language", "en-US,en;q=0.9"),
+            Header::from_str("sec-ch-ua", "\"Chromium\";v=\"92\", \" Not A;Brand\";v=\"99\", \"Google Chrome\";v=\"92\""),
+            Header::from_str("sec-ch-ua-mobile", "?0"),
+            Header::from_str("sec-fetch-dest", "document"),
+            Header::from_str("sec-fetch-mode", "navigate"),
+            Header::from_str("sec-fetch-site", "none"),
+            Header::from_str("sec-fetch-user", "?1"),
+            Header::from_str("upgrade-insecure-requests", "1"),
+            Header::from_str("user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.107 Safari/537.36")
         ];
         if remove_value {
             for header in headers.iter_mut() {
@@ -465,18 +447,18 @@ mod tests {
 
     fn get_response_headers(remove_value: bool) -> Vec<Header> {
         let mut headers = vec![
-            Header::from("age", "316723"),
-            Header::from("cache-control", "max-age=604800"),
-            Header::from("content-encoding", "gzip"),
-            Header::from("content-length", "648"),
-            Header::from("content-type", "text/html; charset=UTF-8"),
-            Header::from("date", "Tue, 10 Aug 2021 06:59:14 GMT"),
-            Header::from("etag", "\"3147526947+ident+gzip\""),
-            Header::from("expires", "Tue, 17 Aug 2021 06:59:14 GMT"),
-            Header::from("last-modified", "Thu, 17 Oct 2019 07:18:26 GMT"),
-            Header::from("server", "ECS (sab/5708)"),
-            Header::from("vary", "Accept-Encoding"),
-            Header::from("x-cache", "HIT"),
+            Header::from_str("age", "316723"),
+            Header::from_str("cache-control", "max-age=604800"),
+            Header::from_str("content-encoding", "gzip"),
+            Header::from_str("content-length", "648"),
+            Header::from_str("content-type", "text/html; charset=UTF-8"),
+            Header::from_str("date", "Tue, 10 Aug 2021 06:59:14 GMT"),
+            Header::from_str("etag", "\"3147526947+ident+gzip\""),
+            Header::from_str("expires", "Tue, 17 Aug 2021 06:59:14 GMT"),
+            Header::from_str("last-modified", "Thu, 17 Oct 2019 07:18:26 GMT"),
+            Header::from_str("server", "ECS (sab/5708)"),
+            Header::from_str("vary", "Accept-Encoding"),
+            Header::from_str("x-cache", "HIT"),
         ];
         if remove_value {
             for header in headers.iter_mut() {
@@ -604,7 +586,7 @@ mod tests {
 	#[test]
 	fn rfc_appendix_b1_encode() {
 		let qpack = Qpack::new(1, 1024);
-		let headers = vec![Header::from(":path", "/index.html")];
+		let headers = vec![Header::from_str(":path", "/index.html")];
 		let mut encoded = vec![];
 		let commit_func = qpack.encode_headers(&mut encoded, headers, STREAM_ID, false);
         commit(commit_func);
@@ -620,14 +602,14 @@ mod tests {
 								0x69, 0x6e, 0x64, 0x65, 0x78,
 								0x2e, 0x68, 0x74, 0x6d, 0x6c];
 		let out = qpack.decode_headers(&wire, STREAM_ID).unwrap();
-		assert_eq!(out.0, vec![Header::from(":path", "/index.html")]);
+		assert_eq!(out.0, vec![Header::from_str(":path", "/index.html")]);
 		assert_eq!(out.1, false);
 	}
 
 	#[test]
 	fn encode_indexed_simple() {
 		let qpack = Qpack::new(1, 1024);
-		let headers = vec![Header::from(":path", "/")];
+		let headers = vec![Header::from_str(":path", "/")];
         let mut encoded = vec![];
 		let commit_func = qpack.encode_headers(&mut encoded, headers, STREAM_ID, false);
         commit(commit_func);
@@ -640,7 +622,7 @@ mod tests {
 		let wire = vec![0x00, 0x00, 0xc1];
 		let out = qpack.decode_headers(&wire, STREAM_ID).unwrap();
 		assert_eq!(out.0,
-			vec![Header::from(":path", "/")]);
+			vec![Header::from_str(":path", "/")]);
         assert_eq!(out.1, false);
 	}
     #[test]
@@ -699,8 +681,8 @@ mod tests {
         };
 
         let mut ths = vec![];
-        let headers_set = vec![vec![Header::from(":path", "/"), Header::from("age", "0")],
-                                            vec![Header::from("content-length", "0"), Header::from(":method", "CONNECT")]];
+        let headers_set = vec![vec![Header::from_str(":path", "/"), Header::from_str("age", "0")],
+                                            vec![Header::from_str("content-length", "0"), Header::from_str(":method", "CONNECT")]];
         let expected_wires: Vec<Vec<u8>> = vec![vec![], vec![]];
         for i in 0..headers_set.len() {
             let en = Arc::clone(&safe_encoder);
@@ -726,8 +708,8 @@ mod tests {
             let capacity = 220;
             let commit_func = qpack_encoder.encode_set_dynamic_table_capacity(&mut encoded, capacity);
             commit(commit_func);
-            let headers = vec![Header::from(":authority", "www.example.com"),
-                                          Header::from(":path", "/sample/path")];
+            let headers = vec![Header::from_str(":authority", "www.example.com"),
+                                          Header::from_str(":path", "/sample/path")];
 
             let commit_func = qpack_encoder.encode_insert_headers(&mut encoded, headers, false);
             assert_eq!(encoded, vec![0x3f, 0xbd, 0x01, 0xc0, 0x0f, 0x77, 0x77,
@@ -747,8 +729,8 @@ mod tests {
         println!("Step 2");
         {   // header transfer
             let mut encoded = vec![];
-            let headers = vec![Header::from(":authority", "www.example.com"),
-                                          Header::from(":path", "/sample/path")];
+            let headers = vec![Header::from_str(":authority", "www.example.com"),
+                                          Header::from_str(":path", "/sample/path")];
             let commit_func = qpack_encoder.encode_headers(&mut encoded, headers.clone(), STREAM_ID, false);
             commit(commit_func);
             assert_eq!(encoded, vec![0x03, 0x81, 0x10, 0x11]);
@@ -779,7 +761,7 @@ mod tests {
         println!("Step 4");
         {   // encoder instruction
             let mut encoded = vec![];
-            let headers = vec![Header::from("custom-key", "custom-value")];
+            let headers = vec![Header::from_str("custom-key", "custom-value")];
             let commit_func = qpack_encoder.encode_insert_headers(&mut encoded, headers, false);
             assert_eq!(encoded, vec![0x4a, 0x63, 0x75, 0x73, 0x74, 0x6f, 0x6d, 0x2d, 0x6b, 0x65,
                                     0x79, 0x0c, 0x63, 0x75, 0x73, 0x74, 0x6f, 0x6d, 0x2d, 0x76,
@@ -812,7 +794,7 @@ mod tests {
         println!("Step 6");
         {   // encoder instruction
             let mut encoded = vec![];
-            let headers = vec![Header::from(":authority", "www.example.com")];
+            let headers = vec![Header::from_str(":authority", "www.example.com")];
             let commit_func = qpack_encoder.encode_insert_headers(&mut encoded, headers, false);
             assert_eq!(encoded, vec![0x02]);
             commit(commit_func);
@@ -827,9 +809,9 @@ mod tests {
         println!("Step 7");
         {   // header transfer
             let mut encoded = vec![];
-            let headers = vec![Header::from(":authority", "www.example.com"),
-                                        Header::from(":path", "/"),
-                                        Header::from("custom-key", "custom-value")];
+            let headers = vec![Header::from_str(":authority", "www.example.com"),
+                                        Header::from_str(":path", "/"),
+                                        Header::from_str("custom-key", "custom-value")];
             let commit_func = qpack_encoder.encode_headers(&mut encoded, headers.clone(), 8, false);
             commit(commit_func);
             assert_eq!(encoded, vec![0x05, 0x00, 0x80, 0xc1, 0x81]);
@@ -856,11 +838,11 @@ mod tests {
         println!("Step 9");
         {   // encoder instruction
             let mut encoded = vec![];
-            let headers = vec![Header::from("custom-key", "custom-value2")];
+            let headers = vec![Header::from_str("custom-key", "custom-value2")];
             let commit_func = qpack_encoder.encode_insert_headers(&mut encoded, headers, false);
             assert_eq!(encoded, vec![0x81, 0x0d, 0x63, 0x75, 0x73, 0x74, 0x6f, 0x6d,
                                      0x2d, 0x76, 0x61, 0x6c, 0x75, 0x65, 0x32]);
-                                     commit(commit_func);
+            commit(commit_func);
 
             let commit_func = qpack_decoder.decode_encoder_instruction(&encoded);
             commit(commit_func);
