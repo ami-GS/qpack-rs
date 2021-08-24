@@ -665,7 +665,7 @@ mod tests {
         let safe_encoder = Arc::new(qpack_encoder);
         let safe_decoder = Arc::new(qpack_decoder);
 
-        let f = |headers: Vec<Header>, stream_id: u16, expected_wire: Vec<u8>,
+        let f = |headers: Vec<Header>, stream_id: u16, _expected_wire: Vec<u8>,
                                                 encoder: Arc<Qpack>, decoder: Arc<Qpack>| {
             let mut encoded = vec![];
             let commit_func = encoder.encode_headers(&mut encoded, headers.clone(), stream_id, false);

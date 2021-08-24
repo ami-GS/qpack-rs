@@ -1,4 +1,4 @@
-use std::{cmp::max, collections::VecDeque, error, sync::{Arc, Condvar, Mutex, RwLock}, usize::MAX};
+use std::{collections::VecDeque, error, sync::{Arc, Condvar, Mutex}};
 
 use crate::{DecompressionFailed, EncoderStreamError, Header, types::DynamicHeader};
 
