@@ -151,7 +151,7 @@ impl DynamicTable {
     pub fn get_entry(&self, abs_idx: usize) -> Result<Entry, Box<dyn error::Error>> {
         match self.list.get(abs_idx) {
             Some(entry) => Ok((*entry).clone()),
-            None => Ok(ERROR_ENTRY.clone())
+            None => Err(DecompressionFailed.into())
         }
     }
     pub fn get(&self, abs_idx: usize) -> Result<Header, Box<dyn error::Error>> {
@@ -170,5 +170,108 @@ impl DynamicTable {
         // error when exceed limit as QPACK_ENCODER_STREAM_ERROR?
         // Err(EncoderStreamError.into())
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use std::sync::{Arc, Condvar, Mutex};
+    const MAX_TABLE_SIZE: usize = 1024;
+    use crate::{DecompressionFailed, EncoderStreamError, Header, table::dynamic_table::DynamicHeader};
+
+    use super::{DynamicTable, Entry};
+    fn gen_table() -> DynamicTable {
+        let cv = Arc::new((Mutex::new(0), Condvar::new()));
+        DynamicTable::new(MAX_TABLE_SIZE, cv)
+    }
+
+    #[test]
+    fn set_capacity() {
+        let cap = 512;
+        let mut table = gen_table();
+        let out = table.set_capacity(cap);
+        assert_eq!(out.unwrap(), ());
+        assert_eq!(table.capacity, cap);
+    }
+
+    #[test]
+    fn set_capacity_err() {
+        let cap = MAX_TABLE_SIZE + 1;
+        let mut table = gen_table();
+        let out = table.set_capacity(cap).unwrap_err();
+        assert!(out.downcast_ref::<EncoderStreamError>().is_some());
+    }
+
+    fn verify_insert(table: &DynamicTable, expected_size: usize, expected_insert_count: usize, expected_list_len: usize) {
+        assert_eq!(table.current_size, expected_size);
+        let (mux, _) = &*table.cv;
+        let insert_count = mux.lock().unwrap();
+        assert_eq!(*insert_count, expected_insert_count);
+        assert_eq!(table.list.len(), expected_list_len);
+    }
+
+    #[test]
+    fn insert_header() {
+        let cap = 512;
+        let mut table = gen_table();
+        let _ = table.set_capacity(cap);
+        let header = Header::from_str(":path", "/index.html");
+        let out = table.insert_header(header.clone());
+        assert_eq!(out.unwrap(), ());
+        verify_insert(&table, header.size(), 1, 1);
+    }
+
+    #[test]
+    fn insert_header_err_bigger_than_cap() {
+        let cap = 10;
+        let mut table = gen_table();
+        let _ = table.set_capacity(cap);
+        let header = Header::from_str(":path", "/index.html");
+        let out = table.insert_header(header.clone()).unwrap_err();
+        assert!(out.downcast_ref::<EncoderStreamError>().is_some());
+        verify_insert(&table, 0, 0, 0);
+    }
+    #[test]
+    fn insert_table_entry() {
+        let cap = 512;
+        let mut table = gen_table();
+        let _ = table.set_capacity(cap);
+        let header = Box::new(DynamicHeader::from_str(":path", "/index.html"));
+        let size = header.size();
+        let out = table.insert_table_entry(Entry::new(header));
+        assert_eq!(out.unwrap(), ());
+        verify_insert(&table, size, 1, 1);
+    }
+    #[test]
+    fn insert_table_entry_bigger_than_cap() {
+        let cap = 10;
+        let mut table = gen_table();
+        let _ = table.set_capacity(cap);
+        let header = Box::new(DynamicHeader::from_str(":path", "/index.html"));
+        let out = table.insert_table_entry(Entry::new(header)).unwrap_err();
+        assert!(out.downcast_ref::<EncoderStreamError>().is_some());
+        verify_insert(&table, 0, 0, 0);
+    }
+    #[test]
+    fn get() {
+        let cap = 512;
+        let mut table = gen_table();
+        let _ = table.set_capacity(cap);
+        let headers = vec![
+            Header::from_str(":path", "/index.html"),
+            Header::from_str("TARGET_KEY", "TARGET_VALUE"),
+            Header::from_str(":method", "GET"),
+        ];
+        for header in &headers {
+            let _ = table.insert_header(header.clone());
+        }
+        let header = table.get(1);
+        assert_eq!(header.unwrap(), headers[1]);
+    }
+    #[test]
+    fn get_not_found() {
+        let table = gen_table();
+        let out = table.get(128).unwrap_err();
+        assert!(out.downcast_ref::<DecompressionFailed>().is_some());
     }
 }
