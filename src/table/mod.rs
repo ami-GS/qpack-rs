@@ -1,7 +1,7 @@
 mod dynamic_table;
 
 use std::error;
-use std::sync::{Arc, Condvar, Mutex, RwLock};
+use std::sync::{Arc, Condvar, Mutex, RwLock, RwLockWriteGuard};
 
 use crate::types::StrHeader;
 use crate::{DecompressionFailed, Header};
@@ -65,43 +65,39 @@ impl Table {
         self.dynamic_table.read().unwrap().get_entry(self.calc_abs_index(base, idx, post_base))
     }
     pub fn set_dynamic_table_capacity(&self, capacity: usize)
-        -> Result<Box<dyn FnOnce() -> Result<(), Box<dyn error::Error>>>,
+        -> Result<Box<dyn FnOnce(&mut RwLockWriteGuard<DynamicTable>) -> Result<(), Box<dyn error::Error>>>,
                     Box<dyn error::Error>> {
-        let dynamic_table = Arc::clone(&self.dynamic_table);
-        Ok(Box::new(move || -> Result<(), Box<dyn error::Error>> {
-            dynamic_table.write().unwrap().set_capacity(capacity)
+        Ok(Box::new(move |dynamic_table: &mut RwLockWriteGuard<DynamicTable>| -> Result<(), Box<dyn error::Error>> {
+            dynamic_table.set_capacity(capacity)
         }))
     }
     pub fn insert_with_name_reference(&self, idx: usize, value: String, on_static: bool)
-        -> Result<Box<dyn FnOnce() -> Result<(), Box<dyn error::Error>>>,
+        -> Result<Box<dyn FnOnce(&mut RwLockWriteGuard<DynamicTable>) -> Result<(), Box<dyn error::Error>>>,
                     Box<dyn error::Error>> {
-        let dynamic_table = Arc::clone(&self.dynamic_table);
         if on_static {
             let name = self.get_header_from_static(idx)?.0.to_string();
-            return Ok(Box::new(move || -> Result<(), Box<dyn error::Error>> {
-                dynamic_table.write().unwrap().insert_header(Header::from_string(name, value))
+            return Ok(Box::new(move |dynamic_table: &mut RwLockWriteGuard<DynamicTable>| -> Result<(), Box<dyn error::Error>> {
+                dynamic_table.insert_header(Header::from_string(name, value))
             }));
         }
         let entry = self.get_entry_from_dynamic(self.get_insert_count(), idx, false)?;
-        return Ok(Box::new(move || -> Result<(), Box<dyn error::Error>> {
-            dynamic_table.write().unwrap().insert_table_entry(Entry::refer_name(entry, value))
+        return Ok(Box::new(move |dynamic_table: &mut RwLockWriteGuard<DynamicTable>| -> Result<(), Box<dyn error::Error>> {
+            dynamic_table.insert_table_entry(Entry::refer_name(entry, value))
         }));
     }
     pub fn insert_with_literal_name(&self, name: String, value: String)
-        -> Result<Box<dyn FnOnce() -> Result<(), Box<dyn error::Error>>>,
+        -> Result<Box<dyn FnOnce(&mut RwLockWriteGuard<DynamicTable>) -> Result<(), Box<dyn error::Error>>>,
                     Box<dyn error::Error>> {
-        let dynamic_table = Arc::clone(&self.dynamic_table);
-        Ok(Box::new(move || -> Result<(), Box<dyn error::Error>> {
-            dynamic_table.write().unwrap().insert_header(Header::from_string(name, value))
+        Ok(Box::new(move |dynamic_table: &mut RwLockWriteGuard<DynamicTable>| -> Result<(), Box<dyn error::Error>> {
+            dynamic_table.insert_header(Header::from_string(name, value))
         }))
     }
     pub fn duplicate(&self, idx: usize)
-        -> Result<Box<dyn FnOnce() -> Result<(), Box<dyn error::Error>>>,
+        -> Result<Box<dyn FnOnce(&mut RwLockWriteGuard<DynamicTable>) -> Result<(), Box<dyn error::Error>>>,
                     Box<dyn error::Error>> {
         let entry = self.get_entry_from_dynamic(self.get_insert_count(), idx, false)?;
-        let dynamic_table = Arc::clone(&self.dynamic_table);
-        Ok(Box::new(move || -> Result<(), Box<dyn error::Error>> {
-            dynamic_table.write().unwrap().insert_table_entry(Entry::duplicate(entry))
+        Ok(Box::new(move |dynamic_table: &mut RwLockWriteGuard<DynamicTable>| -> Result<(), Box<dyn error::Error>> {
+            dynamic_table.insert_table_entry(Entry::duplicate(entry))
         }))
     }
     pub fn get_max_entries(&self) -> u32 {

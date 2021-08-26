@@ -54,10 +54,12 @@ impl Qpack {
             }
         }
         let known_sending_count = Arc::clone(&self.encoder.read().unwrap().known_sending_count);
+        let dynamic_table = Arc::clone(&self.table.dynamic_table);
         Ok(Box::new(move || -> Result<(), Box<dyn error::Error>> {
             let count = commit_funcs.len();
+            let mut locked_table = dynamic_table.write().unwrap();
             for f in commit_funcs {
-                f()?;
+                f(&mut locked_table)?;
             }
             (*known_sending_count.write().unwrap()) += count;
             Ok(())
@@ -255,7 +257,7 @@ impl Qpack {
                     Box<dyn error::Error>> {
         let mut idx = 0;
         let wire_len = wire.len();
-        let mut commit_funcs: Vec<Box<dyn FnOnce() -> Result<(), Box<dyn error::Error>>>> = vec![];
+        let mut commit_funcs = vec![];
 
         while idx < wire_len {
             idx += if wire[idx] & encoder::Instruction::INSERT_WITH_NAME_REFERENCE == encoder::Instruction::INSERT_WITH_NAME_REFERENCE {
@@ -276,9 +278,11 @@ impl Qpack {
                 output
             };
         }
+        let dynamic_table = Arc::clone(&self.table.dynamic_table);
         Ok(Box::new(move || -> Result<(), Box<dyn error::Error>> {
+            let mut locked_table = dynamic_table.write().unwrap();
             for f in commit_funcs {
-                f()?;
+                f(&mut locked_table)?;
             }
             Ok(())
         }))
