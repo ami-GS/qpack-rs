@@ -18,7 +18,7 @@ pub struct Encoder {
     // $2.1.1.1
     _draining_idx: u32,
     pub known_sending_count: Arc<RwLock<usize>>, // TODO: requred?
-    pub pending_sections: HashMap<u16, usize>, // experimental
+    pub pending_sections: HashMap<u16, (usize, Vec<usize>)>,
 }
 
 impl Encoder {
@@ -29,10 +29,10 @@ impl Encoder {
             pending_sections: HashMap::new(),
         }
     }
-    pub fn add_section(&mut self, stream_id: u16, required_insert_count: usize) {
-        self.pending_sections.insert(stream_id, required_insert_count);
+    pub fn add_section(&mut self, stream_id: u16, required_insert_count: usize, dynamic_table_indices: Vec<usize>) {
+        self.pending_sections.insert(stream_id, (required_insert_count, dynamic_table_indices));
     }
-    pub fn ack_section(&mut self, stream_id: u16) -> usize {
+    pub fn ack_section(&mut self, stream_id: u16) -> (usize, Vec<usize>) {
         // TOOD: remove unwrap
         let section = self.pending_sections.get(&stream_id).unwrap().clone();
         self.pending_sections.remove(&stream_id);

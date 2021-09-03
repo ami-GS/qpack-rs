@@ -31,12 +31,15 @@ impl Qpack {
             cv,
         }
     }
+    pub fn is_insertable(&self, headers: &Vec<Header>) -> bool {
+        self.table.is_insertable(headers)
+    }
     pub fn encode_insert_headers(&self, encoded: &mut Vec<u8>, headers: Vec<Header>, use_huffman: bool)
         -> Result<Box<dyn FnOnce() -> Result<(), Box<dyn error::Error>>>,
                     Box<dyn error::Error>> {
         let mut commit_funcs = vec![];
         for header in &headers {
-            let (both_match, on_static, idx) = self.table.find_index(header);
+            let (both_match, on_static, idx) = self.table.find_index(header, false);
             let idx = if idx != usize::MAX && !on_static {
                 // absolute to relative (against 0) conversion
                 self.table.get_insert_count() - 1 - idx
@@ -82,7 +85,7 @@ impl Qpack {
         let dynamic_table = Arc::clone(&self.table.dynamic_table);
         Ok(Box::new(move || -> Result<(), Box<dyn error::Error>> {
             let section = decoder.write().unwrap().ack_section(stream_id);
-            dynamic_table.write().unwrap().ack_section(section);
+            dynamic_table.write().unwrap().ack_section(section, vec![]);
             Ok(())
         }))
     }
@@ -152,11 +155,13 @@ impl Qpack {
 
         let mut find_index_results = vec![];
         let mut refer_dynamic_table = false;
+        // TODO: lock table over the loop
         for header in &headers {
             // TODO: currently find_index from dynamic table returns index from 0.
             //       if it returns absolute index, do not need to calculate evicted_count
             //       in get_prefix_meta_data
-            let result = self.table.find_index(header);
+            // WARN: currently find_index change its state without using mut.
+            let result = self.table.find_index(header, true);
             refer_dynamic_table |= !result.1;
             find_index_results.push(result);
         }
@@ -168,9 +173,14 @@ impl Qpack {
                         post_base,
                         base);
 
+        let mut dynamic_table_indices = vec![];
         for i in 0..headers.len() {
             let header = &headers[i];
             let (both_match, on_static, idx) = find_index_results[i];
+            if !on_static && idx != usize::MAX {
+                dynamic_table_indices.push(idx);
+            }
+
             if both_match {
                 if on_static {
                     Encoder::indexed(encoded, idx as u32, true);
@@ -197,8 +207,8 @@ impl Qpack {
         }
         let encoder = Arc::clone(&self.encoder);
         Ok(Box::new(move || -> Result<(), Box<dyn error::Error>> {
-            if required_insert_count != 0 {
-                encoder.write().unwrap().add_section(stream_id, required_insert_count);
+            if refer_dynamic_table {
+                encoder.write().unwrap().add_section(stream_id, required_insert_count, dynamic_table_indices);
             }
             Ok(())
         }))
@@ -247,6 +257,7 @@ impl Qpack {
             ref_dynamic |= ret.1;
         }
         // ?
+        // TODO: move to commit func?
         if required_insert_count != 0 {
             self.decoder.write().unwrap().add_section(stream_id, required_insert_count);
         }
@@ -299,14 +310,14 @@ impl Qpack {
             idx += if wire[idx] & decoder::Instruction::SECTION_ACKNOWLEDGMENT == decoder::Instruction::SECTION_ACKNOWLEDGMENT {
                 let (len, stream_id) = Encoder::section_ackowledgment(wire, idx)?;
                 if !self.encoder.read().unwrap().has_section(stream_id) {
-                    // section has already been acked
+                    // $4.4.1 section has already been acked
                     return Err(DecoderStreamError.into());
                 }
                 let encoder_c = Arc::clone(&self.encoder);
                 let dynamic_table = Arc::clone(&self.table.dynamic_table);
                 commit_funcs.push(Box::new(move || -> Result<(), Box<dyn error::Error>> {
-                    let section = encoder_c.write().unwrap().ack_section(stream_id);
-                    dynamic_table.write().unwrap().ack_section(section);
+                    let (section, ref_ids) = encoder_c.write().unwrap().ack_section(stream_id);
+                    dynamic_table.write().unwrap().ack_section(section, ref_ids);
                     Ok(())
                 }));
                 len
@@ -321,6 +332,7 @@ impl Qpack {
             } else { // wire[idx] & Instruction::INSERT_COUNT_INCREMENT == Instruction::INSERT_COUNT_INCREMENT
                 let (len, increment) = Encoder::insert_count_increment(wire, idx)?;
                 if increment == 0 || *self.encoder.read().unwrap().known_sending_count.read().unwrap() < self.table.dynamic_table.read().unwrap().known_received_count + increment {
+                    // 4.4.3 invalid value
                     return Err(DecoderStreamError.into());
                 }
                 let dynamic_table = Arc::clone(&self.table.dynamic_table);
@@ -500,6 +512,9 @@ mod tests {
         commit(commit_func);
     }
     fn insert_headers(client: &Qpack, server: &Qpack, headers: Vec<Header>) {
+        if !client.is_insertable(&headers) {
+            assert!(false);
+        }
         let mut encoded = vec![];
         let commit_func = client.encode_insert_headers(&mut encoded, headers, false);
         commit(commit_func);

@@ -14,7 +14,7 @@ impl Instruction {
 pub struct Decoder {
     _size: usize,
     pub current_blocked_streams: u16,
-    pub pending_sections: HashMap<u16, usize>, // experimental
+    pub pending_sections: HashMap<u16, usize>,
 }
 
 impl Decoder {

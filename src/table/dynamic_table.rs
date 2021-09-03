@@ -6,6 +6,7 @@ use crate::{DecompressionFailed, EncoderStreamError, Header, types::DynamicHeade
 pub struct Entry {
     header: Box<DynamicHeader>,
     size: usize,
+    outstanding_count: usize,
 }
 impl Entry {
     pub fn new(header: Box<DynamicHeader>) -> Self {
@@ -13,12 +14,14 @@ impl Entry {
         Self {
             header,
             size,
+            outstanding_count: 0,
         }
     }
     pub fn duplicate(entry: Entry) -> Self {
         Self {
             header: entry.header.clone(),
             size: entry.size,
+            outstanding_count: 0,
         }
     }
     pub fn refer_name(entry: Entry, value: String) -> Self {
@@ -27,6 +30,7 @@ impl Entry {
         Self {
             header,
             size,
+            outstanding_count: 0,
         }
     }
 }
@@ -73,10 +77,34 @@ impl DynamicTable {
         *insert_count += 1;
         cv.notify_all();
     }
-    pub fn ack_section(&mut self, section: usize) {
+    pub fn ack_section(&mut self, section: usize, ids: Vec<usize>) {
+        ids.iter().for_each(|id| {
+            let _ = self.deref_entry_at(*id);
+        });
         self.known_received_count = section;
     }
-    fn evict_upto(&mut self, upto: usize) -> Result<(), Box<dyn error::Error>>{
+    pub fn is_insertable(&self, headers: &Vec<Header>) -> bool {
+        let mut size = 0;
+        for header in headers {
+            size += header.size();
+        }
+        let upto = if self.capacity < size {0} else {self.capacity - size};
+        self.is_evictable_upto(upto)
+    }
+    fn is_evictable_upto(&self, upto: usize) -> bool {
+        let mut current_size = self.current_size;
+        let mut idx = 0;
+        while idx < self.list.len() && upto < current_size {
+            let entry = &self.list[idx];
+            if entry.outstanding_count > 0 || self.known_received_count < idx {
+                return false;
+            }
+            current_size -= entry.size;
+            idx += 1;
+        }
+        true
+    }
+    fn evict_upto(&mut self, upto: usize) -> Result<(), Box<dyn error::Error>> {
         let mut current_size = self.current_size;
         let mut idx = 0;
         while upto < current_size {
@@ -84,8 +112,8 @@ impl DynamicTable {
                 // trying to evict non-evictable entry
                 return Err(EncoderStreamError.into())
             }
-            let header = &self.list[idx];
-            current_size -= header.size;
+            let entry = &self.list[idx];
+            current_size -= entry.size;
             idx += 1;
         }
         while idx > 0 {
@@ -104,7 +132,7 @@ impl DynamicTable {
             if idx + 1 == self.known_received_count {
                 println!("v-------- acked sections --------v");
             }
-            println!("\tAbs:{} ({}={})", idx, entry.header.0, entry.header.1);
+            println!("\tAbs:{}, Refs:{}, ({}={})", idx, entry.outstanding_count, entry.header.0, entry.header.1);
             if idx != 0 {
                 idx -= 1;
             }
@@ -130,6 +158,20 @@ impl DynamicTable {
             abs_idx -= 1;
         }
         (false, candidate_idx)
+    }
+    pub fn ref_entry_at(&mut self, idx: usize) -> Result<(), Box<dyn error::Error>> {
+        match self.list.get_mut(idx) {
+            Some(entry) => entry.outstanding_count += 1,
+            None => return Err(DecompressionFailed.into())
+        }
+        Ok(())
+    }
+    pub fn deref_entry_at(&mut self, idx: usize) -> Result<(), Box<dyn error::Error>> {
+        match self.list.get_mut(idx) {
+            Some(entry) => entry.outstanding_count -= 1,
+            None => return Err(DecompressionFailed.into())
+        }
+        Ok(())
     }
     pub fn insert_table_entry(&mut self, entry: Entry) -> Result<(), Box<dyn error::Error>> {
         let size = entry.size;
