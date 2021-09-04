@@ -38,8 +38,10 @@ impl Encoder {
         self.pending_sections.remove(&stream_id);
         section
     }
-    pub fn cancel_section(&mut self, stream_id: u16) {
+    pub fn cancel_section(&mut self, stream_id: u16) -> Vec<usize> {
+        let (_, indices) = self.pending_sections.get(&stream_id).unwrap().clone();
         self.pending_sections.remove(&stream_id);
+        indices
     }
     pub fn has_section(&self, stream_id: u16) -> bool {
         self.pending_sections.contains_key(&stream_id)

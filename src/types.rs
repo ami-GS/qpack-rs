@@ -32,9 +32,6 @@ impl DynamicHeader {
     pub fn from_str(name: &str, value: &str) -> Self {
         Self(Box::new(name.to_owned()), value.to_owned())
     }
-    // pub fn to_header(&self) -> Header {
-    //     Header(*self.0.clone(), self.1.clone())
-    // }
     pub fn size(&self) -> usize {
         self.0.len() + self.1.len() + 32
     }

@@ -83,6 +83,11 @@ impl DynamicTable {
         });
         self.known_received_count = section;
     }
+    pub fn cancel_section(&mut self, ids: Vec<usize>) {
+        ids.iter().for_each(|id| {
+            let _ = self.deref_entry_at(*id);
+        });
+    }
     pub fn is_insertable(&self, headers: &Vec<Header>) -> bool {
         let mut size = 0;
         for header in headers {
