@@ -3,6 +3,7 @@ mod dynamic_table;
 use std::error;
 use std::sync::{Arc, Condvar, Mutex, RwLock, RwLockWriteGuard};
 
+use crate::transformer::encoder::Encoder;
 use crate::types::StrHeader;
 use crate::{DecompressionFailed, Header};
 
@@ -83,6 +84,8 @@ impl Table {
             dynamic_table.set_capacity(capacity)
         }))
     }
+
+    // commit func of decoding encoder instructions
     pub fn insert_with_name_reference(&self, idx: usize, value: String, on_static: bool)
         -> Result<Box<dyn FnOnce(&mut RwLockWriteGuard<DynamicTable>) -> Result<(), Box<dyn error::Error>>>,
                     Box<dyn error::Error>> {
@@ -112,6 +115,36 @@ impl Table {
             dynamic_table.insert_table_entry(Entry::duplicate(entry))
         }))
     }
+
+    // commit func of decoding decoder instructions
+    pub fn insert_count_increment(&self, increment: usize)
+    -> Result<Box<dyn FnOnce(&mut RwLockWriteGuard<DynamicTable>) -> Result<(), Box<dyn error::Error>>>,
+                Box<dyn error::Error>> {
+        Ok(Box::new(move |dynamic_table: &mut RwLockWriteGuard<DynamicTable>| -> Result<(), Box<dyn error::Error>> {
+            dynamic_table.known_received_count += increment;
+            Ok(())
+        }))
+    }
+    // TODO: want to lock only encoder.pending_sections
+    pub fn section_ackowledgment(&self, encoder: Arc<RwLock<Encoder>>, stream_id: u16)
+    -> Result<Box<dyn FnOnce(&mut RwLockWriteGuard<DynamicTable>) -> Result<(), Box<dyn error::Error>>>,
+                Box<dyn error::Error>> {
+        Ok(Box::new(move |dynamic_table: &mut RwLockWriteGuard<DynamicTable>| -> Result<(), Box<dyn error::Error>> {
+            let (section, ref_ids) = encoder.write().unwrap().ack_section(stream_id);
+            dynamic_table.ack_section(section, ref_ids);
+            Ok(())
+        }))
+    }
+    pub fn stream_cancellation(&self, encoder: Arc<RwLock<Encoder>>, stream_id: u16)
+    -> Result<Box<dyn FnOnce(&mut RwLockWriteGuard<DynamicTable>) -> Result<(), Box<dyn error::Error>>>,
+                Box<dyn error::Error>> {
+        Ok(Box::new(move |dynamic_table: &mut RwLockWriteGuard<DynamicTable>| -> Result<(), Box<dyn error::Error>> {
+            let indices = encoder.write().unwrap().cancel_section(stream_id);
+            dynamic_table.cancel_section(indices);
+            Ok(())
+        }))
+    }
+
     pub fn get_max_entries(&self) -> u32 {
         (self.dynamic_table.read().unwrap().max_capacity as f64 / 32 as f64).floor() as u32
     }

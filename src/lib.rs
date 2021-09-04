@@ -298,7 +298,7 @@ impl Qpack {
                     Box<dyn error::Error>> {
         let mut idx = 0;
         let wire_len = wire.len();
-        let mut commit_funcs: Vec<Box<dyn FnOnce() -> Result<(), Box<dyn error::Error>>>> = vec![];
+        let mut commit_funcs = vec![];
 
         while idx < wire_len {
             idx += if wire[idx] & decoder::Instruction::SECTION_ACKNOWLEDGMENT == decoder::Instruction::SECTION_ACKNOWLEDGMENT {
@@ -307,21 +307,11 @@ impl Qpack {
                     // $4.4.1 section has already been acked
                     return Err(DecoderStreamError.into());
                 }
-                let encoder_c = Arc::clone(&self.encoder);
-                let dynamic_table = Arc::clone(&self.table.dynamic_table);
-                commit_funcs.push(Box::new(move || -> Result<(), Box<dyn error::Error>> {
-                    let (section, ref_ids) = encoder_c.write().unwrap().ack_section(stream_id);
-                    dynamic_table.write().unwrap().ack_section(section, ref_ids);
-                    Ok(())
-                }));
+                commit_funcs.push(self.table.section_ackowledgment(Arc::clone(&self.encoder), stream_id)?);
                 len
             } else if wire[idx] & decoder::Instruction::STREAM_CANCELLATION == decoder::Instruction::STREAM_CANCELLATION {
                 let (len, stream_id) = Encoder::stream_cancellation(wire, idx)?;
-                let encoder_c = Arc::clone(&self.encoder);
-                commit_funcs.push(Box::new(move || -> Result<(), Box<dyn error::Error>> {
-                    encoder_c.write().unwrap().cancel_section(stream_id);
-                    Ok(())
-                }));
+                commit_funcs.push(self.table.stream_cancellation(Arc::clone(&self.encoder), stream_id)?);
                 len
             } else { // wire[idx] & Instruction::INSERT_COUNT_INCREMENT == Instruction::INSERT_COUNT_INCREMENT
                 let (len, increment) = Encoder::insert_count_increment(wire, idx)?;
@@ -329,17 +319,15 @@ impl Qpack {
                     // 4.4.3 invalid value
                     return Err(DecoderStreamError.into());
                 }
-                let dynamic_table = Arc::clone(&self.table.dynamic_table);
-                commit_funcs.push(Box::new(move || -> Result<(), Box<dyn error::Error>> {
-                    dynamic_table.write().unwrap().known_received_count += increment;
-                    Ok(())
-                }));
+                commit_funcs.push(self.table.insert_count_increment(increment)?);
                 len
             };
         }
+        let dynamic_table = Arc::clone(&self.table.dynamic_table);
         Ok(Box::new(move || -> Result<(), Box<dyn error::Error>> {
+            let mut locked_dynamic_table = dynamic_table.write().unwrap();
             for f in commit_funcs {
-                f()?;
+                f(&mut locked_dynamic_table)?;
             }
             Ok(())
         }))
