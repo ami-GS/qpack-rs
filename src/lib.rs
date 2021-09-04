@@ -38,12 +38,15 @@ impl Qpack {
         -> Result<Box<dyn FnOnce() -> Result<(), Box<dyn error::Error>>>,
                     Box<dyn error::Error>> {
         let mut commit_funcs = vec![];
-        for header in &headers {
-            let (both_match, on_static, idx) = self.table.find_index(header, false);
-            let idx = if idx != usize::MAX && !on_static {
+        // INFO: Perforamnce of bulk lookup or lookup each would be depends on lookup algorithm
+        let find_index_results = self.table.find_headers(&headers);
+        for i in 0..headers.len() {
+            let header = &headers[i];
+            let (both_match, on_static, mut idx) = find_index_results[i];
+            if idx != usize::MAX && !on_static {
                 // absolute to relative (against 0) conversion
-                self.table.get_insert_count() - 1 - idx
-            } else { idx };
+                idx = self.table.get_insert_count() - 1 - idx
+            }
 
             if both_match && !on_static {
                 Encoder::duplicate(encoded, idx)?;
@@ -56,6 +59,7 @@ impl Qpack {
                 commit_funcs.push(self.table.insert_with_literal_name(header.0.clone(), header.1.clone())?);
             }
         }
+
         let known_sending_count = Arc::clone(&self.encoder.read().unwrap().known_sending_count);
         let dynamic_table = Arc::clone(&self.table.dynamic_table);
         Ok(Box::new(move || -> Result<(), Box<dyn error::Error>> {
@@ -152,21 +156,8 @@ impl Qpack {
     pub fn encode_headers(&self, encoded: &mut Vec<u8>, headers: Vec<Header>, stream_id: u16, use_huffman: bool)
         -> Result<Box<dyn FnOnce() -> Result<(), Box<dyn error::Error>>>,
                     Box<dyn error::Error>> {
-
-        let mut find_index_results = vec![];
-        let mut refer_dynamic_table = false;
-        // TODO: lock table over the loop
-        for header in &headers {
-            // TODO: currently find_index from dynamic table returns index from 0.
-            //       if it returns absolute index, do not need to calculate evicted_count
-            //       in get_prefix_meta_data
-            // WARN: currently find_index change its state without using mut.
-            let result = self.table.find_index(header, true);
-            refer_dynamic_table |= !result.1;
-            find_index_results.push(result);
-        }
-
-        let (required_insert_count, post_base, base) = self.get_prefix_meta_data(&find_index_results, refer_dynamic_table);
+        let find_index_results = self.table.find_headers(&headers);
+        let (required_insert_count, post_base, base) = self.get_prefix_meta_data(&find_index_results, true);
         Encoder::prefix(encoded,
                         &self.table,
                         required_insert_count as u32,
@@ -206,8 +197,11 @@ impl Qpack {
             }
         }
         let encoder = Arc::clone(&self.encoder);
+        let dynamic_table = Arc::clone(&self.table.dynamic_table);
         Ok(Box::new(move || -> Result<(), Box<dyn error::Error>> {
-            if refer_dynamic_table {
+            if 0 < dynamic_table_indices.len() {
+                let mut write_lock = dynamic_table.write().unwrap();
+                dynamic_table_indices.iter().try_for_each(|idx| write_lock.ref_entry_at(*idx))?;
                 encoder.write().unwrap().add_section(stream_id, required_insert_count, dynamic_table_indices);
             }
             Ok(())

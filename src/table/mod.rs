@@ -20,7 +20,7 @@ impl Table {
     }
     // TODO: return (both_matched, on_static_table, idx)
     //       try to remove on_static_table as my HPACK did not use
-    pub fn find_index(&self, target: &Header, set_ref: bool) -> (bool, bool, usize) {
+    pub fn find_header(&self, target: &Header) -> (bool, bool, usize) {
         let not_found_val = usize::MAX;
 
         let mut static_candidate_idx: usize = not_found_val;
@@ -43,11 +43,16 @@ impl Table {
         if ret.1 == not_found_val && static_candidate_idx != not_found_val {
             return (false, true, static_candidate_idx);
         }
-        if ret.1 != not_found_val && set_ref {
-            let _ = self.dynamic_table.write().unwrap().ref_entry_at(ret.1);
-        }
 
         (ret.0, false, ret.1) // (false, false, usize::MAX) means not found
+    }
+    pub fn find_headers(&self, headers: &Vec<Header>) -> Vec<(bool, bool, usize)> {
+        // TODO: read lock dynamic table?
+        let mut out = vec![];
+        for header in headers {
+            out.push(self.find_header(header));
+        }
+        out
     }
     pub fn is_insertable(&self, headers: &Vec<Header>) -> bool {
         self.dynamic_table.read().unwrap().is_insertable(headers)
