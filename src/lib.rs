@@ -48,14 +48,14 @@ impl Qpack {
             }
 
             if both_match && !on_static {
-                Encoder::duplicate(encoded, idx)?;
+                Encoder::encode_duplicate(encoded, idx)?;
                 commit_funcs.push(self.table.duplicate(idx)?);
             } else if idx != usize::MAX {
-                Encoder::insert_with_name_reference(encoded, on_static, idx, &header.1, use_huffman)?;
-                commit_funcs.push(self.table.insert_with_name_reference(idx, header.1.clone(), on_static)?);
+                Encoder::encode_insert_refer_name(encoded, on_static, idx, &header.1, use_huffman)?;
+                commit_funcs.push(self.table.insert_refer_name(idx, header.1.clone(), on_static)?);
             } else {
-                Encoder::insert_with_literal_name(encoded, &header.0, &header.1, use_huffman)?;
-                commit_funcs.push(self.table.insert_with_literal_name(header.0.clone(), header.1.clone())?);
+                Encoder::encode_insert_both_literal(encoded, &header.0, &header.1, use_huffman)?;
+                commit_funcs.push(self.table.insert_both_literal(header.0.clone(), header.1.clone())?);
             }
         }
 
@@ -73,7 +73,7 @@ impl Qpack {
     }
     pub fn encode_set_dynamic_table_capacity(&self, encoded: &mut Vec<u8>, capacity: usize)
             -> Result<CommitFunc, Box<dyn error::Error>> {
-        Encoder::set_dynamic_table_capacity(encoded, capacity)?;
+        Encoder::encode_set_dynamic_table_capacity(encoded, capacity)?;
         let dynamic_table = Arc::clone(&self.table.dynamic_table);
         Ok(Box::new(move || -> Result<(), Box<dyn error::Error>> {
             dynamic_table.write().unwrap().set_capacity(capacity)
@@ -81,7 +81,7 @@ impl Qpack {
     }
     pub fn encode_section_ackowledgment(&self, encoded: &mut Vec<u8>, stream_id: u16)
             -> Result<CommitFunc, Box<dyn error::Error>> {
-        Decoder::section_ackowledgment(encoded, stream_id)?;
+        Decoder::encode_section_ackowledgment(encoded, stream_id)?;
         let decoder = Arc::clone(&self.decoder);
         let dynamic_table = Arc::clone(&self.table.dynamic_table);
         Ok(Box::new(move || -> Result<(), Box<dyn error::Error>> {
@@ -92,7 +92,7 @@ impl Qpack {
     }
     pub fn encode_stream_cancellation(&self, encoded: &mut Vec<u8>, stream_id: u16)
             -> Result<CommitFunc, Box<dyn error::Error>> {
-        Decoder::stream_cancellation(encoded, stream_id)?;
+        Decoder::encode_stream_cancellation(encoded, stream_id)?;
         let decoder = Arc::clone(&self.decoder);
         Ok(Box::new(move || -> Result<(), Box<dyn error::Error>> {
             decoder.write().unwrap().cancel_section(stream_id);
@@ -104,7 +104,7 @@ impl Qpack {
             -> Result<CommitFunc, Box<dyn error::Error>> {
         let dynamic_table_read = self.table.dynamic_table.read().unwrap();
         let increment = dynamic_table_read.list.len() - dynamic_table_read.known_received_count;
-        Decoder::insert_count_increment(encoded, increment)?;
+        Decoder::encode_insert_count_increment(encoded, increment)?;
         let dynamic_table = Arc::clone(&self.table.dynamic_table);
         Ok(Box::new(move || -> Result<(), Box<dyn error::Error>> {
             dynamic_table.write().unwrap().known_received_count += increment;
@@ -168,26 +168,26 @@ impl Qpack {
 
             if both_match {
                 if on_static {
-                    Encoder::indexed(encoded, idx as u32, true);
+                    Encoder::encode_indexed(encoded, idx as u32, true);
                 } else {
                     if post_base {
-                        Encoder::indexed_post_base_index(encoded, idx as u32);
+                        Encoder::encode_indexed_post_base(encoded, idx as u32);
                     } else {
-                        Encoder::indexed(encoded, base - idx as u32 - 1, false);
+                        Encoder::encode_indexed(encoded, base - idx as u32 - 1, false);
                     }
                 }
             } else if idx != usize::MAX {
                 if on_static {
-                    Encoder::literal_name_reference(encoded, idx as u32, &header.1, true, use_huffman)?;
+                    Encoder::encode_refer_name(encoded, idx as u32, &header.1, true, use_huffman)?;
                 } else {
                     if post_base {
-                        Encoder::literal_post_base_name_reference(encoded, idx as u32, &header.1, use_huffman)?;
+                        Encoder::encode_refer_name_post_base(encoded, idx as u32, &header.1, use_huffman)?;
                     } else {
-                        Encoder::literal_name_reference(encoded, base - idx as u32 - 1, &header.1, false, use_huffman)?;
+                        Encoder::encode_refer_name(encoded, base - idx as u32 - 1, &header.1, false, use_huffman)?;
                     }
                 }
             } else { // not found
-                Encoder::literal_literal_name(encoded, &header, use_huffman)?;
+                Encoder::encode_both_literal(encoded, &header, use_huffman)?;
             }
         }
         let encoder = Arc::clone(&self.encoder);
@@ -229,15 +229,15 @@ impl Qpack {
         let mut ref_dynamic = false;
         while idx < wire_len {
             let ret = if wire[idx] & FieldType::INDEXED == FieldType::INDEXED {
-                Decoder::indexed(wire, &mut idx, base, required_insert_count, &self.table)?
-            } else if wire[idx] & FieldType::LITERAL_NAME_REFERENCE == FieldType::LITERAL_NAME_REFERENCE {
-                Decoder::literal_name_reference(wire, &mut idx, base, required_insert_count, &self.table)?
-            } else if wire[idx] & FieldType::LITERAL_LITERAL_NAME == FieldType::LITERAL_LITERAL_NAME {
-                Decoder::literal_literal_name(wire, &mut idx)?
-            } else if wire[idx] & FieldType::INDEXED_POST_BASE_INDEX == FieldType::INDEXED_POST_BASE_INDEX {
-                Decoder::indexed_post_base_index(wire, &mut idx, base, required_insert_count, &self.table)?
-            } else if wire[idx] & 0b11110000 == FieldType::LITERAL_POST_BASE_NAME_REFERENCE {
-                Decoder::literal_post_base_name_reference(wire, &mut idx, base, required_insert_count, &self.table)?
+                Decoder::decode_indexed(wire, &mut idx, base, required_insert_count, &self.table)?
+            } else if wire[idx] & FieldType::REFER_NAME == FieldType::REFER_NAME {
+                Decoder::decode_refer_name(wire, &mut idx, base, required_insert_count, &self.table)?
+            } else if wire[idx] & FieldType::BOTH_LITERAL == FieldType::BOTH_LITERAL {
+                Decoder::decode_both_literal(wire, &mut idx)?
+            } else if wire[idx] & FieldType::INDEXED_POST_BASE == FieldType::INDEXED_POST_BASE {
+                Decoder::decode_indexed_post_base(wire, &mut idx, base, required_insert_count, &self.table)?
+            } else if wire[idx] & 0b11110000 == FieldType::REFER_NAME_POST_BASE {
+                Decoder::decode_refer_name_post_base(wire, &mut idx, base, required_insert_count, &self.table)?
             } else {
                 return Err(DecompressionFailed.into());
             };
@@ -258,20 +258,20 @@ impl Qpack {
         let mut commit_funcs = vec![];
 
         while idx < wire_len {
-            idx += if wire[idx] & encoder::Instruction::INSERT_WITH_NAME_REFERENCE == encoder::Instruction::INSERT_WITH_NAME_REFERENCE {
-                let (output, input) = Decoder::insert_with_name_reference(wire, idx)?;
-                commit_funcs.push(self.table.insert_with_name_reference(input.0, input.1, input.2)?);
+            idx += if wire[idx] & encoder::Instruction::INSERT_REFER_NAME == encoder::Instruction::INSERT_REFER_NAME {
+                let (output, input) = Decoder::decode_insert_refer_name(wire, idx)?;
+                commit_funcs.push(self.table.insert_refer_name(input.0, input.1, input.2)?);
                 output
-            } else if wire[idx] & encoder::Instruction::INSERT_WITH_LITERAL_NAME == encoder::Instruction::INSERT_WITH_LITERAL_NAME {
-                let (output, input) = Decoder::insert_with_literal_name(wire, idx)?;
-                commit_funcs.push(self.table.insert_with_literal_name(input.0, input.1)?);
+            } else if wire[idx] & encoder::Instruction::INSERT_BOTH_LITERAL == encoder::Instruction::INSERT_BOTH_LITERAL {
+                let (output, input) = Decoder::decode_insert_both_literal(wire, idx)?;
+                commit_funcs.push(self.table.insert_both_literal(input.0, input.1)?);
                 output
             } else if wire[idx] & encoder::Instruction::SET_DYNAMIC_TABLE_CAPACITY == encoder::Instruction::SET_DYNAMIC_TABLE_CAPACITY {
-                let (output, input) = Decoder::dynamic_table_capacity(wire, idx)?;
+                let (output, input) = Decoder::decode_dynamic_table_capacity(wire, idx)?;
                 commit_funcs.push(self.table.set_dynamic_table_capacity(input)?);
                 output
             } else { // if wire[idx] & encoder::Instruction::DUPLICATE == encoder::Instruction::DUPLICATE
-                let (output, input) = Decoder::duplicate(wire, idx)?;
+                let (output, input) = Decoder::decode_duplicate(wire, idx)?;
                 commit_funcs.push(self.table.duplicate(input)?);
                 output
             };
@@ -294,7 +294,7 @@ impl Qpack {
 
         while idx < wire_len {
             idx += if wire[idx] & decoder::Instruction::SECTION_ACKNOWLEDGMENT == decoder::Instruction::SECTION_ACKNOWLEDGMENT {
-                let (len, stream_id) = Encoder::section_ackowledgment(wire, idx)?;
+                let (len, stream_id) = Encoder::decode_section_ackowledgment(wire, idx)?;
                 if !self.encoder.read().unwrap().has_section(stream_id) {
                     // $4.4.1 section has already been acked
                     return Err(DecoderStreamError.into());
@@ -302,11 +302,11 @@ impl Qpack {
                 commit_funcs.push(self.table.section_ackowledgment(Arc::clone(&self.encoder), stream_id)?);
                 len
             } else if wire[idx] & decoder::Instruction::STREAM_CANCELLATION == decoder::Instruction::STREAM_CANCELLATION {
-                let (len, stream_id) = Encoder::stream_cancellation(wire, idx)?;
+                let (len, stream_id) = Encoder::decode_stream_cancellation(wire, idx)?;
                 commit_funcs.push(self.table.stream_cancellation(Arc::clone(&self.encoder), stream_id)?);
                 len
             } else { // wire[idx] & Instruction::INSERT_COUNT_INCREMENT == Instruction::INSERT_COUNT_INCREMENT
-                let (len, increment) = Encoder::insert_count_increment(wire, idx)?;
+                let (len, increment) = Encoder::decode_insert_count_increment(wire, idx)?;
                 if increment == 0 || *self.encoder.read().unwrap().known_sending_count.read().unwrap() < self.table.dynamic_table.read().unwrap().known_received_count + increment {
                     // 4.4.3 invalid value
                     return Err(DecoderStreamError.into());
@@ -342,7 +342,7 @@ impl FieldType {
     // +---+---+---+---+---+---+---+---+
     // | 0 | 0 | 0 | 1 |  Index (4+)   |
     // +---+---+---+---+---------------+
-    pub const INDEXED_POST_BASE_INDEX: u8 = 0b00010000;
+    pub const INDEXED_POST_BASE: u8 = 0b00010000;
     // 4.5.4
     // 0   1   2   3   4   5   6   7
     // +---+---+---+---+---+---+---+---+
@@ -352,7 +352,7 @@ impl FieldType {
     // +---+---------------------------+
     // |  Value String (Length bytes)  |
     // +-------------------------------+
-    pub const LITERAL_NAME_REFERENCE: u8 = 0b01000000;
+    pub const REFER_NAME: u8 = 0b01000000;
     // 4.5.5
     // 0   1   2   3   4   5   6   7
     // +---+---+---+---+---+---+---+---+
@@ -362,7 +362,7 @@ impl FieldType {
     // +---+---------------------------+
     // |  Value String (Length bytes)  |
     // +-------------------------------+
-    pub const LITERAL_POST_BASE_NAME_REFERENCE: u8 = 0b00000000;
+    pub const REFER_NAME_POST_BASE: u8 = 0b00000000;
     // 4.5.6
     // 0   1   2   3   4   5   6   7
     // +---+---+---+---+---+---+---+---+
@@ -374,7 +374,7 @@ impl FieldType {
     // +---+---------------------------+
     // |  Value String (Length bytes)  |
     // +-------------------------------+
-    pub const LITERAL_LITERAL_NAME: u8 = 0b00100000;
+    pub const BOTH_LITERAL: u8 = 0b00100000;
 }
 
 #[derive(Debug)]

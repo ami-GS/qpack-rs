@@ -86,7 +86,7 @@ impl Table {
     }
 
     // commit func of decoding encoder instructions
-    pub fn insert_with_name_reference(&self, idx: usize, value: String, on_static: bool)
+    pub fn insert_refer_name(&self, idx: usize, value: String, on_static: bool)
         -> Result<Box<dyn FnOnce(&mut RwLockWriteGuard<DynamicTable>) -> Result<(), Box<dyn error::Error>>>,
                     Box<dyn error::Error>> {
         if on_static {
@@ -100,7 +100,7 @@ impl Table {
             dynamic_table.insert_table_entry(Entry::refer_name(entry, value))
         }));
     }
-    pub fn insert_with_literal_name(&self, name: String, value: String)
+    pub fn insert_both_literal(&self, name: String, value: String)
         -> Result<Box<dyn FnOnce(&mut RwLockWriteGuard<DynamicTable>) -> Result<(), Box<dyn error::Error>>>,
                     Box<dyn error::Error>> {
         Ok(Box::new(move |dynamic_table: &mut RwLockWriteGuard<DynamicTable>| -> Result<(), Box<dyn error::Error>> {
