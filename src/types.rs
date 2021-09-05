@@ -1,3 +1,5 @@
+use std::error;
+
 // StrHeader will be implemented later once all works
 // I assume &str header's would be slow due to page fault
 pub type StrHeader<'a> = (&'a str, &'a str);
@@ -42,3 +44,5 @@ impl From<Header> for DynamicHeader {
         Self(Box::new(header.0), header.1)
     }
 }
+
+pub type CommitFunc = Box<dyn FnOnce() -> Result<(), Box<dyn error::Error>>>;

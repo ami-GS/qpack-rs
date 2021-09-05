@@ -2,7 +2,7 @@ mod transformer;
 mod table;
 mod types;
 
-use types::Header;
+use types::{CommitFunc, Header};
 use crate::transformer::decoder::{self, Decoder};
 use crate::transformer::encoder::{self, Encoder};
 use crate::table::Table;
@@ -35,8 +35,7 @@ impl Qpack {
         self.table.is_insertable(headers)
     }
     pub fn encode_insert_headers(&self, encoded: &mut Vec<u8>, headers: Vec<Header>, use_huffman: bool)
-        -> Result<Box<dyn FnOnce() -> Result<(), Box<dyn error::Error>>>,
-                    Box<dyn error::Error>> {
+            -> Result<CommitFunc, Box<dyn error::Error>> {
         let mut commit_funcs = vec![];
         // INFO: Perforamnce of bulk lookup or lookup each would be depends on lookup algorithm
         let find_index_results = self.table.find_headers(&headers);
@@ -73,8 +72,7 @@ impl Qpack {
         }))
     }
     pub fn encode_set_dynamic_table_capacity(&self, encoded: &mut Vec<u8>, capacity: usize)
-        -> Result<Box<dyn FnOnce() -> Result<(), Box<dyn error::Error>>>,
-                  Box<dyn error::Error>> {
+            -> Result<CommitFunc, Box<dyn error::Error>> {
         Encoder::set_dynamic_table_capacity(encoded, capacity)?;
         let dynamic_table = Arc::clone(&self.table.dynamic_table);
         Ok(Box::new(move || -> Result<(), Box<dyn error::Error>> {
@@ -82,8 +80,7 @@ impl Qpack {
         }))
     }
     pub fn encode_section_ackowledgment(&self, encoded: &mut Vec<u8>, stream_id: u16)
-        -> Result<Box<dyn FnOnce() -> Result<(), Box<dyn error::Error>>>,
-                    Box<dyn error::Error>> {
+            -> Result<CommitFunc, Box<dyn error::Error>> {
         Decoder::section_ackowledgment(encoded, stream_id)?;
         let decoder = Arc::clone(&self.decoder);
         let dynamic_table = Arc::clone(&self.table.dynamic_table);
@@ -94,8 +91,7 @@ impl Qpack {
         }))
     }
     pub fn encode_stream_cancellation(&self, encoded: &mut Vec<u8>, stream_id: u16)
-        -> Result<Box<dyn FnOnce() -> Result<(), Box<dyn error::Error>>>,
-                    Box<dyn error::Error>> {
+            -> Result<CommitFunc, Box<dyn error::Error>> {
         Decoder::stream_cancellation(encoded, stream_id)?;
         let decoder = Arc::clone(&self.decoder);
         Ok(Box::new(move || -> Result<(), Box<dyn error::Error>> {
@@ -105,8 +101,7 @@ impl Qpack {
     }
     // TODO: check whether to update state
     pub fn encode_insert_count_increment(&self, encoded: &mut Vec<u8>)
-        -> Result<Box<dyn FnOnce() -> Result<(), Box<dyn error::Error>>>,
-                    Box<dyn error::Error>> {
+            -> Result<CommitFunc, Box<dyn error::Error>> {
         let dynamic_table_read = self.table.dynamic_table.read().unwrap();
         let increment = dynamic_table_read.list.len() - dynamic_table_read.known_received_count;
         Decoder::insert_count_increment(encoded, increment)?;
@@ -154,8 +149,7 @@ impl Qpack {
     }
 
     pub fn encode_headers(&self, encoded: &mut Vec<u8>, headers: Vec<Header>, stream_id: u16, use_huffman: bool)
-        -> Result<Box<dyn FnOnce() -> Result<(), Box<dyn error::Error>>>,
-                    Box<dyn error::Error>> {
+            -> Result<CommitFunc, Box<dyn error::Error>> {
         let find_index_results = self.table.find_headers(&headers);
         let (required_insert_count, post_base, base) = self.get_prefix_meta_data(&find_index_results, true);
         Encoder::prefix(encoded,
@@ -258,8 +252,7 @@ impl Qpack {
         Ok((headers, ref_dynamic))
     }
     pub fn decode_encoder_instruction(&self, wire: &Vec<u8>)
-        -> Result<Box<dyn FnOnce() -> Result<(), Box<dyn error::Error>>>,
-                    Box<dyn error::Error>> {
+            -> Result<CommitFunc, Box<dyn error::Error>> {
         let mut idx = 0;
         let wire_len = wire.len();
         let mut commit_funcs = vec![];
@@ -294,8 +287,7 @@ impl Qpack {
     }
 
     pub fn decode_decoder_instruction(&self, wire: &Vec<u8>)
-        -> Result<Box<dyn FnOnce() -> Result<(), Box<dyn error::Error>>>,
-                    Box<dyn error::Error>> {
+            -> Result<CommitFunc, Box<dyn error::Error>> {
         let mut idx = 0;
         let wire_len = wire.len();
         let mut commit_funcs = vec![];
