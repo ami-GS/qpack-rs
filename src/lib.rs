@@ -202,6 +202,18 @@ impl Qpack {
         }))
     }
 
+    fn block_decoding(&self, required_insert_count: usize) -> Result<(), Box<dyn error::Error>> {
+        if self.blocked_streams_limit < self.decoder.read().unwrap().current_blocked_streams + 1 {
+            return Err(DecompressionFailed.into());
+        }
+        self.decoder.write().unwrap().current_blocked_streams += 1;
+
+        let (mux, cv) = &*self.cv;
+
+        let locked_insert_count = mux.lock().unwrap();
+        let _ = cv.wait_while(locked_insert_count, |locked_insert_count| *locked_insert_count < required_insert_count).unwrap();
+        Ok(())
+    }
     pub fn decode_headers(&self, wire: &Vec<u8>, stream_id: u16) -> Result<(Vec<Header>, bool), Box<dyn error::Error>> {
         let mut idx = 0;
         let (len, required_insert_count, base) = Decoder::prefix(wire, idx, &self.table)?;
@@ -212,16 +224,7 @@ impl Qpack {
         // OPTIMIZE: blocked just before referencing dynamic_table is better?
         let insert_count = self.table.get_insert_count();
         if insert_count < required_insert_count {
-            if self.blocked_streams_limit < self.decoder.read().unwrap().current_blocked_streams + 1 {
-                return Err(DecompressionFailed.into());
-            }
-            self.decoder.write().unwrap().current_blocked_streams += 1;
-
-            let (mux, cv) = &*self.cv;
-            let mut locked_insert_count = mux.lock().unwrap();
-            while *locked_insert_count < required_insert_count {
-                locked_insert_count = cv.wait(locked_insert_count).unwrap();
-            }
+            self.block_decoding(required_insert_count)?;
         }
 
         let mut headers = vec![];
