@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::error;
 use std::sync::{Arc, RwLock};
 
+use crate::types::HeaderString;
 use crate::{FieldType, table::Table, Header};
 use crate::transformer::huffman::HUFFMAN_TRANSFORMER;
 use crate::transformer::qnum::Qnum;
@@ -46,22 +47,22 @@ impl Encoder {
     pub fn has_section(&self, stream_id: u16) -> bool {
         self.pending_sections.contains_key(&stream_id)
     }
-    fn pack_string(encoded: &mut Vec<u8>, value: &str, n: u8, use_huffman: bool) -> Result<usize, Box<dyn error::Error>> {
+    fn pack_string(encoded: &mut Vec<u8>, value: &HeaderString, n: u8) -> Result<usize, Box<dyn error::Error>> {
         Ok(
-            if use_huffman {
+            if value.huffman {
                 // TODO: optimize
                 let mut encoded2 = vec![];
-                HUFFMAN_TRANSFORMER.encode(&mut encoded2, value)?;
+                HUFFMAN_TRANSFORMER.encode(&mut encoded2, &value.value)?;
                 let len = Qnum::encode(encoded, encoded2.len() as u32, n);
                 let wire_len = encoded.len();
-                encoded[wire_len - len] |= 1 << n;
+                encoded[wire_len - len] |= 1 << n; // H bit
                 let encoded2_len = encoded2.len();
                 encoded.append(&mut encoded2);
                 len + encoded2_len
             } else {
-                let len = Qnum::encode(encoded, value.len() as u32, n);
-                encoded.append(&mut value.as_bytes().to_vec());
-                len + value.len()
+                let len = Qnum::encode(encoded, value.value.len() as u32, n);
+                encoded.append(&mut value.value.as_bytes().to_vec());
+                len + value.value.len()
             }
         )
     }
@@ -86,7 +87,7 @@ impl Encoder {
         let len = Qnum::encode(encoded, delta_base, 7);
         if s_flag {
             let wire_len = encoded.len();
-            encoded[wire_len - len] |= 0b10000000;
+            encoded[wire_len - len] |= 0b10000000; // S bit
         }
     }
 
@@ -97,22 +98,20 @@ impl Encoder {
         encoded[wire_len - len] |= Instruction::SET_DYNAMIC_TABLE_CAPACITY;
         Ok(())
     }
-    pub fn encode_insert_refer_name(encoded: &mut Vec<u8>, on_static: bool, name_idx: usize, value: &str, use_huffman: bool) -> Result<(), Box<dyn error::Error>> {
+    pub fn encode_insert_refer_name(encoded: &mut Vec<u8>, on_static: bool, name_idx: usize, value: &HeaderString) -> Result<(), Box<dyn error::Error>> {
         let len = Qnum::encode(encoded, name_idx as u32, 6);
         let wire_len = encoded.len();
-        if on_static { // "T" bit
-            encoded[wire_len - len] |= 0b01000000;
-        }
-        encoded[wire_len - len] |= Instruction::INSERT_REFER_NAME;
+        encoded[wire_len - len] |= Instruction::INSERT_REFER_NAME |
+                                    (on_static as u8) << 6; // T bit
 
-        Encoder::pack_string(encoded, value, 7, use_huffman)?;
+        Encoder::pack_string(encoded, value, 7)?;
         Ok(())
     }
-    pub fn encode_insert_both_literal(encoded: &mut Vec<u8>, name: &str, value: &str, use_huffman: bool) -> Result<(), Box<dyn error::Error>> {
-        let len = Encoder::pack_string(encoded, name, 5, use_huffman)?;
+    pub fn encode_insert_both_literal(encoded: &mut Vec<u8>, header: &Header) -> Result<(), Box<dyn error::Error>> {
+        let len = Encoder::pack_string(encoded, header.get_name(), 5)?;
         let wire_len = encoded.len();
         encoded[wire_len - len] |= Instruction::INSERT_BOTH_LITERAL;
-        Encoder::pack_string(encoded, value, 7, use_huffman)?;
+        Encoder::pack_string(encoded, header.get_value(), 7)?;
         Ok(())
     }
     pub fn encode_duplicate(encoded: &mut Vec<u8>, idx: usize) -> Result<(), Box<dyn error::Error>> {
@@ -140,11 +139,8 @@ impl Encoder {
     pub fn encode_indexed(encoded: &mut Vec<u8>, idx: u32, from_static: bool) {
         let len = Qnum::encode(encoded, idx, 6);
         let wire_len = encoded.len();
-        encoded[wire_len - len] |= FieldType::INDEXED;
-        if from_static {
-            let wire_len = encoded.len();
-            encoded[wire_len - len] |= 0b01000000;
-        }
+        encoded[wire_len - len] |= FieldType::INDEXED |
+                                    (from_static as u8) << 6; // T bit
     }
     pub fn encode_indexed_post_base(encoded: &mut Vec<u8>, idx: u32) {
         let len = Qnum::encode(encoded, idx, 4);
@@ -154,34 +150,32 @@ impl Encoder {
     pub fn encode_refer_name(
         encoded: &mut Vec<u8>,
         idx: u32,
-        value: &str,
+        header: Header,
         from_static: bool,
-        use_huffman: bool
     ) -> Result<usize, Box<dyn error::Error>> {
-        // TODO: "N" bit?
         let len = Qnum::encode(encoded, idx, 4);
+        let value = header.get_value();
         let wire_len = encoded.len();
-        encoded[wire_len - len] |= FieldType::REFER_NAME;
-        if from_static {
-            let wire_len = encoded.len();
-            encoded[wire_len - len] |= 0b00010000;
-        }
-        Encoder::pack_string(encoded, value, 7, use_huffman)
+        encoded[wire_len - len] |= FieldType::REFER_NAME |
+                                    (from_static as u8) << 4 | // T bit
+                                    (header.sensitive as u8) << 5; // N bit
+        Encoder::pack_string(encoded, value, 7)
     }
-    pub fn encode_refer_name_post_base(encoded: &mut Vec<u8>, idx: u32, value: &str, use_huffman: bool)
+    pub fn encode_refer_name_post_base(encoded: &mut Vec<u8>, idx: u32, header: Header)
         -> Result<usize, Box<dyn error::Error>> {
-        // TODO: "N" bit?
         let len = Qnum::encode(encoded, idx, 3);
+        let value = header.get_value();
         let wire_len = encoded.len();
-        encoded[wire_len - len] |= FieldType::REFER_NAME_POST_BASE;
-        Encoder::pack_string(encoded, value, 7, use_huffman)
+        encoded[wire_len - len] |= FieldType::REFER_NAME_POST_BASE |
+                                    (header.sensitive as u8) << 3; // N bit
+        Encoder::pack_string(encoded, value, 7)
     }
-    pub fn encode_both_literal(encoded: &mut Vec<u8>, header: &Header, use_huffman: bool)
+    pub fn encode_both_literal(encoded: &mut Vec<u8>, header: Header)
         -> Result<usize, Box<dyn error::Error>>{
-        // TODO: "N"?
-        let len = Encoder::pack_string(encoded, &header.0, 3, use_huffman).unwrap();
+        let len = Encoder::pack_string(encoded, header.get_name(), 3).unwrap();
         let wire_len  = encoded.len();
-        encoded[wire_len - len] |= FieldType::BOTH_LITERAL;
-        Encoder::pack_string(encoded, &header.1, 7, use_huffman)
+        encoded[wire_len - len] |= FieldType::BOTH_LITERAL |
+                                    (header.sensitive as u8) << 4; // N bit
+        Encoder::pack_string(encoded, header.get_value(), 7)
     }
 }

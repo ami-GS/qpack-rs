@@ -4,7 +4,7 @@ use std::error;
 use std::sync::{Arc, Condvar, Mutex, RwLock, RwLockWriteGuard};
 
 use crate::transformer::encoder::Encoder;
-use crate::types::StrHeader;
+use crate::types::{HeaderString, StrHeader};
 use crate::{DecompressionFailed, Header};
 
 use self::dynamic_table::{DynamicTable, Entry};
@@ -26,8 +26,8 @@ impl Table {
 
         let mut static_candidate_idx: usize = not_found_val;
         for (idx, (name, val)) in STATIC_TABLE.iter().enumerate() {
-            if target.0.eq(*name) {
-                if target.1.eq(*val) {
+            if target.get_name().value.eq(*name) {
+                if target.get_value().value.eq(*val) {
                     // match both
                     return (true, true, idx);
                 }
@@ -62,7 +62,7 @@ impl Table {
         if STATIC_TABLE_SIZE <= idx {
             return Err(DecompressionFailed.into());
         }
-        Ok(Header::from_str_header(STATIC_TABLE[idx]))
+        Ok(STATIC_TABLE[idx].into())
     }
     fn calc_abs_index(&self, base: usize, idx: usize, post_base: bool) -> usize {
         if post_base {
@@ -86,25 +86,26 @@ impl Table {
     }
 
     // commit func of decoding encoder instructions
-    pub fn insert_refer_name(&self, idx: usize, value: String, on_static: bool)
+    pub fn insert_refer_name(&self, idx: usize, value: HeaderString, on_static: bool)
         -> Result<Box<dyn FnOnce(&mut RwLockWriteGuard<DynamicTable>) -> Result<(), Box<dyn error::Error>>>,
                     Box<dyn error::Error>> {
         if on_static {
-            let name = self.get_header_from_static(idx)?.0.to_string();
+            let mut header = self.get_header_from_static(idx)?;
+            header.set_value(value);
             return Ok(Box::new(move |dynamic_table: &mut RwLockWriteGuard<DynamicTable>| -> Result<(), Box<dyn error::Error>> {
-                dynamic_table.insert_header(Header::from_string(name, value))
+                dynamic_table.insert_header(header)
             }));
         }
         let entry = self.get_entry_from_dynamic(self.get_insert_count(), idx, false)?;
         return Ok(Box::new(move |dynamic_table: &mut RwLockWriteGuard<DynamicTable>| -> Result<(), Box<dyn error::Error>> {
-            dynamic_table.insert_table_entry(Entry::refer_name(entry, value))
+            dynamic_table.insert_table_entry(Entry::refer_name(entry, value.value))
         }));
     }
-    pub fn insert_both_literal(&self, name: String, value: String)
+    pub fn insert_both_literal(&self, header: Header)
         -> Result<Box<dyn FnOnce(&mut RwLockWriteGuard<DynamicTable>) -> Result<(), Box<dyn error::Error>>>,
                     Box<dyn error::Error>> {
         Ok(Box::new(move |dynamic_table: &mut RwLockWriteGuard<DynamicTable>| -> Result<(), Box<dyn error::Error>> {
-            dynamic_table.insert_header(Header::from_string(name, value))
+            dynamic_table.insert_header(header)
         }))
     }
     pub fn duplicate(&self, idx: usize)

@@ -1,5 +1,6 @@
 use std::{collections::HashMap, error};
 
+use crate::types::HeaderString;
 use crate::{DecompressionFailed, Header, table::Table};
 use crate::transformer::huffman::HUFFMAN_TRANSFORMER;
 use crate::transformer::qnum::Qnum;
@@ -12,7 +13,6 @@ impl Instruction {
 }
 
 pub struct Decoder {
-    _size: usize,
     pub current_blocked_streams: u16,
     pub pending_sections: HashMap<u16, usize>,
 }
@@ -20,7 +20,6 @@ pub struct Decoder {
 impl Decoder {
     pub fn new() -> Self {
         Self {
-            _size: 0,
             current_blocked_streams: 0,
             pending_sections: HashMap::new(),
         }
@@ -37,15 +36,15 @@ impl Decoder {
     pub fn cancel_section(&mut self, stream_id: u16) {
         self.pending_sections.remove(&stream_id);
     }
-    fn parse_string(wire: &Vec<u8>, idx: usize, n: u8) -> Result<(usize, String), Box<dyn error::Error>> {
+    fn parse_string(wire: &Vec<u8>, idx: usize, n: u8) -> Result<(usize, HeaderString), Box<dyn error::Error>> {
         let (len, value_len) = Qnum::decode(wire, idx, n);
         Ok((len + value_len as usize,
         if wire[idx] & (1 << n) > 0 {
-            HUFFMAN_TRANSFORMER.decode(wire, idx + len, value_len as usize)?
+            HeaderString::new(HUFFMAN_TRANSFORMER.decode(wire, idx + len, value_len as usize)?, true)
         } else {
-            std::str::from_utf8(
+            HeaderString::new(std::str::from_utf8(
                 &wire[(idx + len)..(idx + len + value_len as usize)],
-            )?.to_string()
+            )?.to_string(), false)
         }))
     }
     pub fn prefix(wire: &Vec<u8>, idx: usize, table: &Table) -> Result<(usize, u32, usize), Box<dyn error::Error>> {
@@ -112,16 +111,16 @@ impl Decoder {
         let (len1, cap) = Qnum::decode(wire, idx, 5);
         Ok((len1, cap as usize))
     }
-    pub fn decode_insert_refer_name(wire: &Vec<u8>, idx: usize) -> Result<(usize, (usize, String, bool)), Box<dyn error::Error>> {
+    pub fn decode_insert_refer_name(wire: &Vec<u8>, idx: usize) -> Result<(usize, (usize, HeaderString, bool)), Box<dyn error::Error>> {
         let on_static_table = wire[idx] & 0b01000000 == 0b01000000;
         let (len1, name_idx) = Qnum::decode(wire, idx, 6);
         let (len2, value) = Decoder::parse_string(wire, idx + len1, 7)?;
-        Ok((len1 + len2, (name_idx as usize, value.to_string(), on_static_table)))
+        Ok((len1 + len2, (name_idx as usize, value, on_static_table)))
     }
-    pub fn decode_insert_both_literal(wire: &Vec<u8>, idx: usize) -> Result<(usize, (String, String)), Box<dyn error::Error>> {
+    pub fn decode_insert_both_literal(wire: &Vec<u8>, idx: usize) -> Result<(usize, Header), Box<dyn error::Error>> {
         let (len1, name) = Decoder::parse_string(wire, idx, 5)?;
         let (len2, value) = Decoder::parse_string(wire, idx + len1, 7)?;
-        Ok((len1 + len2, (name, value)))
+        Ok((len1 + len2, Header::new_with_header_string(name, value, false)))
     }
     pub fn decode_duplicate(wire: &Vec<u8>, idx: usize) -> Result<(usize, usize), Box<dyn error::Error>> {
         let (len, index) = Qnum::decode(wire, idx, 5);
@@ -149,10 +148,11 @@ impl Decoder {
     pub fn decode_refer_name(wire: &Vec<u8>, idx: &mut usize, base: usize, required_insert_count: usize, table: &Table) -> Result<(Header, bool), Box<dyn error::Error>> {
         let (len, table_idx) = Qnum::decode(wire, *idx, 4);
         let from_static = wire[*idx] & 0b00010000 == 0b00010000;
+        let is_sensitive = wire[*idx] & 0b00100000 == 0b00100000;
         *idx += len;
 
         let table_idx = table_idx as usize;
-        let header = if from_static {
+        let mut header = if from_static {
             table.get_header_from_static(table_idx)?
         } else {
             if required_insert_count <= table_idx {
@@ -162,16 +162,18 @@ impl Decoder {
         };
         let (len, value) = Decoder::parse_string(wire, *idx, 7)?;
         *idx += len;
-
-        Ok((Header::from_string(header.0, value), !from_static))
+        header.set_value(value);
+        header.set_sensitive(is_sensitive);
+        Ok((header, !from_static))
     }
     pub fn decode_both_literal(wire: &Vec<u8>, idx: &mut usize) -> Result<(Header, bool), Box<dyn error::Error>> {
+        let is_sensitive = wire[*idx] & 0b00010000 == 0b00010000;
         let (len, name) = Decoder::parse_string(wire, *idx, 3)?;
         *idx += len;
         let (len, value) = Decoder::parse_string(wire, *idx, 7)?;
         *idx += len;
 
-        Ok((Header::from_string(name, value), false))
+        Ok((Header::new_with_header_string(name, value, is_sensitive), false))
     }
     pub fn decode_indexed_post_base(wire: &Vec<u8>, idx: &mut usize, base: usize, required_insert_count: usize, table: &Table) -> Result<(Header, bool), Box<dyn error::Error>> {
         let (len, table_idx) = Qnum::decode(wire, *idx, 4);
@@ -184,19 +186,23 @@ impl Decoder {
         Ok((header, true))
     }
     pub fn decode_refer_name_post_base(wire: &Vec<u8>, idx: &mut usize, base: usize, required_insert_count: usize, table: &Table) -> Result<(Header, bool), Box<dyn error::Error>> {
+        let is_sensitive = wire[*idx] & 0b00001000 == 0b00001000;
         let (len, table_idx) = Qnum::decode(wire, *idx, 3);
         let table_idx = table_idx as usize;
         if required_insert_count <= table_idx {
             return Err(DecompressionFailed.into());
         }
         *idx += len;
-        let header = table.get_header_from_dynamic(base, table_idx, true)?;
+        let mut header = table.get_header_from_dynamic(base, table_idx, true)?;
         let (len, value_length) = Qnum::decode(wire, *idx, 7);
         *idx += len;
+        // TODO: replace to Decoder::parse_string
         let value = std::str::from_utf8(
             &wire[*idx..*idx + value_length as usize],
         )?;
         *idx += value_length as usize;
-        Ok((Header::from_string(header.0, value.to_string()), true))
+        header.set_sensitive(is_sensitive);
+        header.set_value(HeaderString::new(value.to_string(), false));
+        Ok((header, true))
     }
 }

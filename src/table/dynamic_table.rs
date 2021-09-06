@@ -152,8 +152,8 @@ impl DynamicTable {
         // relative from base opposit end
         let mut abs_idx = self.list.len();
         for entry in self.list.iter().rev() {
-            if (&*entry.header.0).eq(&target.0) {
-                if entry.header.1.eq(&target.1) {
+            if (&*entry.header.0).eq(&target.get_name().value) {
+                if entry.header.1.eq(&target.get_value().value) {
                     return (true, abs_idx-1);
                 }
                 if candidate_idx == usize::MAX {
