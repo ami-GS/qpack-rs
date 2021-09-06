@@ -194,15 +194,10 @@ impl Decoder {
         }
         *idx += len;
         let mut header = table.get_header_from_dynamic(base, table_idx, true)?;
-        let (len, value_length) = Qnum::decode(wire, *idx, 7);
+        let (len, value) = Decoder::parse_string(wire, *idx, 7)?;
         *idx += len;
-        // TODO: replace to Decoder::parse_string
-        let value = std::str::from_utf8(
-            &wire[*idx..*idx + value_length as usize],
-        )?;
-        *idx += value_length as usize;
         header.set_sensitive(is_sensitive);
-        header.set_value(HeaderString::new(value.to_string(), false));
+        header.set_value(value);
         Ok((header, true))
     }
 }

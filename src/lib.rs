@@ -168,7 +168,7 @@ impl Qpack {
                     Encoder::encode_indexed(encoded, idx as u32, true);
                 } else {
                     if post_base {
-                        Encoder::encode_indexed_post_base(encoded, idx as u32);
+                        Encoder::encode_indexed_post_base(encoded, idx as u32 - base);
                     } else {
                         Encoder::encode_indexed(encoded, base - idx as u32 - 1, false);
                     }
@@ -178,7 +178,7 @@ impl Qpack {
                     Encoder::encode_refer_name(encoded, idx as u32, header, true)?;
                 } else {
                     if post_base {
-                        Encoder::encode_refer_name_post_base(encoded, idx as u32, header)?;
+                        Encoder::encode_refer_name_post_base(encoded, idx as u32 - base, header)?;
                     } else {
                         Encoder::encode_refer_name(encoded, base - idx as u32 - 1, header, false)?;
                     }
@@ -541,6 +541,18 @@ mod tests {
         insert_headers(&qpack_encoder, &qpack_decoder, request_headers);
         qpack_encoder.dump_dynamic_table();
         qpack_decoder.dump_dynamic_table();
+    }
+
+    #[test]
+    fn insert_send_recv_refer_name_post() {
+        let (qpack_encoder, qpack_decoder) = gen_client_server_instances(1, 4096);
+        let request_headers = get_request_headers(false);
+        insert_headers(&qpack_encoder, &qpack_decoder, request_headers);
+        let mut request_headers = get_request_headers(true);
+        request_headers = request_headers[..request_headers.len()/2-2].to_vec();
+
+        let refer_dynamic_table = send_headers(&qpack_encoder, &qpack_decoder, request_headers);
+        assert!(refer_dynamic_table);
     }
 
     #[test]
