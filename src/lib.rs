@@ -163,7 +163,7 @@ impl Qpack {
                 dynamic_table_indices.push(idx);
             }
 
-            if both_match {
+            if both_match && !header.sensitive {
                 if on_static {
                     Encoder::encode_indexed(encoded, idx as u32, true);
                 } else {
@@ -530,8 +530,53 @@ mod tests {
     fn simple_get() {
         let (qpack_encoder, qpack_decoder) = gen_client_server_instances(1, 1024);
         let request_headers = get_request_headers(false);
+        let refer_dynamic_table = send_headers(&qpack_encoder, &qpack_decoder, request_headers.clone());
+        assert!(!refer_dynamic_table);
+    }
+
+    #[test]
+    fn simple_get_huffman() {
+        let (qpack_encoder, qpack_decoder) = gen_client_server_instances(1, 1024);
+        let mut request_headers = get_request_headers(false);
+        request_headers.iter_mut().for_each(|header| header.set_huffman((true, true)));
+        let refer_dynamic_table = send_headers(&qpack_encoder, &qpack_decoder, request_headers.clone());
+        assert!(!refer_dynamic_table);
+
+        request_headers.iter_mut().for_each(|header| header.set_huffman((true, false)));
+        let refer_dynamic_table = send_headers(&qpack_encoder, &qpack_decoder, request_headers.clone());
+        assert!(!refer_dynamic_table);
+
+        request_headers.iter_mut().for_each(|header| header.set_huffman((false, true)));
+        let refer_dynamic_table = send_headers(&qpack_encoder, &qpack_decoder, request_headers.clone());
+        assert!(!refer_dynamic_table);
+    }
+
+    #[test]
+    fn simple_get_sensitive() {
+        let (qpack_encoder, qpack_decoder) = gen_client_server_instances(1, 1024);
+        let mut request_headers = get_request_headers(false);
+        request_headers.iter_mut().for_each(|header| header.set_sensitive(true));
         let refer_dynamic_table = send_headers(&qpack_encoder, &qpack_decoder, request_headers);
         assert!(!refer_dynamic_table);
+    }
+
+    #[test]
+    fn simple_get_huffman_sensitive() {
+        let (qpack_encoder, qpack_decoder) = gen_client_server_instances(1, 1024);
+        let mut request_headers = get_request_headers(false);
+        request_headers.iter_mut().for_each(|header| header.set_sensitive(true));
+        request_headers.iter_mut().for_each(|header| header.set_huffman((true, true)));
+        let refer_dynamic_table = send_headers(&qpack_encoder, &qpack_decoder, request_headers.clone());
+        assert!(!refer_dynamic_table);
+
+        request_headers.iter_mut().for_each(|header| header.set_huffman((true, false)));
+        let refer_dynamic_table = send_headers(&qpack_encoder, &qpack_decoder, request_headers.clone());
+        assert!(!refer_dynamic_table);
+
+        request_headers.iter_mut().for_each(|header| header.set_huffman((false, true)));
+        let refer_dynamic_table = send_headers(&qpack_encoder, &qpack_decoder, request_headers.clone());
+        assert!(!refer_dynamic_table);
+
     }
 
     #[test]
@@ -553,6 +598,54 @@ mod tests {
 
         let refer_dynamic_table = send_headers(&qpack_encoder, &qpack_decoder, request_headers);
         assert!(refer_dynamic_table);
+    }
+
+    fn insert_send_recv_many_prep(num: usize) -> Vec<Header> {
+        let mut headers = vec![];
+        headers.push(Header::from_str("", ""));
+        let mut i = 0;
+        loop {
+            let header = &headers[i];
+            let mut base_name = header.get_name().value.clone();
+            let mut base_value = header.get_value().value.clone();
+
+            for j in 0..26 {
+                base_name.push(('a' as u8 + j) as char);
+                base_value.push(('a' as u8 + j) as char);
+                headers.push(Header::from_str(&base_name, &base_value));
+                base_name.pop();
+                base_value.pop();
+            }
+            if num <= headers.len() {
+                break;
+            }
+            i += 1;
+        }
+        headers
+    }
+
+    #[test]
+    fn insert_send_recv_many_at_once() {
+        let num = 1024 * 10;
+        let (qpack_encoder, qpack_decoder) = gen_client_server_instances(1, num * 2096);
+        let headers = insert_send_recv_many_prep(num);
+        insert_send_ack(&qpack_encoder, &qpack_decoder, headers, false);
+    }
+
+    #[test]
+    fn insert_send_recv_many_one_by_one() {
+        let num = 1024 * 10;
+        let (qpack_encoder, qpack_decoder) = gen_client_server_instances(1, num * 2096);
+        let mut headers = insert_send_recv_many_prep(num);
+
+        let mut batch_size = 1;
+        while 0 != headers.len() {
+            let boundary = if batch_size <= headers.len() {batch_size} else {headers.len()};
+            let request_headers = headers[..boundary].to_vec();
+            headers = headers[boundary..].to_vec();
+            insert_send_ack(&qpack_encoder, &qpack_decoder, request_headers, false);
+            batch_size += 1;
+        }
     }
 
     #[test]

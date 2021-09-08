@@ -3,7 +3,7 @@ use std::error;
 // StrHeader will be implemented later once all works
 // I assume &str header's would be slow due to page fault
 pub type StrHeader<'a> = (&'a str, &'a str);
-#[derive(PartialEq, Eq, Debug, Clone)]
+#[derive(Eq, Debug, Clone)]
 pub struct HeaderString {
     pub value: String,
     pub huffman: bool,
@@ -11,6 +11,16 @@ pub struct HeaderString {
 impl HeaderString {
     pub fn new(value: String, huffman: bool) -> Self {
         Self {value, huffman}
+    }
+    pub fn set_huffman(&mut self, flag: bool) {
+        self.huffman = flag;
+    }
+}
+
+impl PartialEq for HeaderString {
+    // INFO: indexed string cannot decode huffman flag
+    fn eq(&self, other: &Self) -> bool {
+        self.value == other.value
     }
 }
 
@@ -26,13 +36,6 @@ impl Header {
         Self {
             name: HeaderString::new(name, false),
             value: HeaderString::new(value, false),
-            sensitive,
-        }
-    }
-    pub fn new_huffman(name: String, value: String, sensitive: bool) -> Self {
-        Self {
-            name: HeaderString::new(name, true),
-            value: HeaderString::new(value, true),
             sensitive,
         }
     }
@@ -75,6 +78,10 @@ impl Header {
     }
     pub fn set_sensitive(&mut self, sensitive: bool) {
         self.sensitive = sensitive;
+    }
+    pub fn set_huffman(&mut self, huffman: (bool, bool)) {
+        self.name.huffman = huffman.0;
+        self.value.huffman = huffman.1;
     }
 }
 
