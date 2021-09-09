@@ -1,4 +1,4 @@
-use std::error;
+use std::{error, fmt};
 
 // StrHeader will be implemented later once all works
 // I assume &str header's would be slow due to page fault
@@ -17,6 +17,15 @@ impl HeaderString {
     }
 }
 
+impl fmt::Debug for Header {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("Header")
+        .field(&self.name.value)
+        .field(&self.value.value)
+        .finish()
+    }
+}
+
 impl PartialEq for HeaderString {
     // INFO: indexed string cannot decode huffman flag
     fn eq(&self, other: &Self) -> bool {
@@ -24,7 +33,7 @@ impl PartialEq for HeaderString {
     }
 }
 
-#[derive(PartialEq, Eq, Debug, Clone)]
+#[derive(PartialEq, Eq, Clone)]
 pub struct Header {
     name: HeaderString,
     value: HeaderString,

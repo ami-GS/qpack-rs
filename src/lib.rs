@@ -626,7 +626,7 @@ mod tests {
 
     #[test]
     fn insert_send_recv_many_at_once() {
-        let num = 1024 * 10;
+        let num = 1024 * 20;
         let (qpack_encoder, qpack_decoder) = gen_client_server_instances(1, num * 2096);
         let headers = insert_send_recv_many_prep(num);
         insert_send_ack(&qpack_encoder, &qpack_decoder, headers, false);
@@ -634,7 +634,7 @@ mod tests {
 
     #[test]
     fn insert_send_recv_many_one_by_one() {
-        let num = 1024 * 10;
+        let num = 1024 * 20;
         let (qpack_encoder, qpack_decoder) = gen_client_server_instances(1, num * 2096);
         let mut headers = insert_send_recv_many_prep(num);
 

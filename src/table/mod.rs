@@ -74,7 +74,7 @@ impl Table {
     pub fn get_header_from_dynamic(&self, base: usize, idx: usize, post_base: bool) -> Result<Header, Box<dyn error::Error>> {
         self.dynamic_table.read().unwrap().get(self.calc_abs_index(base, idx, post_base))
     }
-    pub fn get_entry_from_dynamic(&self, base: usize, idx: usize, post_base: bool) -> Result<Entry, Box<dyn error::Error>> {
+    pub fn get_entry_from_dynamic(&self, base: usize, idx: usize, post_base: bool) -> Result<Box<Entry>, Box<dyn error::Error>> {
         self.dynamic_table.read().unwrap().get_entry(self.calc_abs_index(base, idx, post_base))
     }
     pub fn set_dynamic_table_capacity(&self, capacity: usize)
@@ -98,7 +98,7 @@ impl Table {
         }
         let entry = self.get_entry_from_dynamic(self.get_insert_count(), idx, false)?;
         return Ok(Box::new(move |dynamic_table: &mut RwLockWriteGuard<DynamicTable>| -> Result<(), Box<dyn error::Error>> {
-            dynamic_table.insert_table_entry(Entry::refer_name(entry, value.value))
+            dynamic_table.insert_table_entry(Box::new(Entry::refer_name(*entry, value.value)))
         }));
     }
     pub fn insert_both_literal(&self, header: Header)
@@ -113,7 +113,7 @@ impl Table {
                     Box<dyn error::Error>> {
         let entry = self.get_entry_from_dynamic(self.get_insert_count(), idx, false)?;
         Ok(Box::new(move |dynamic_table: &mut RwLockWriteGuard<DynamicTable>| -> Result<(), Box<dyn error::Error>> {
-            dynamic_table.insert_table_entry(Entry::duplicate(entry))
+            dynamic_table.insert_table_entry(Box::new(Entry::duplicate(*entry)))
         }))
     }
 

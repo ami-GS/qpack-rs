@@ -1,8 +1,8 @@
-use std::{collections::VecDeque, error, sync::{Arc, Condvar, Mutex}};
+use std::{collections::{HashMap, VecDeque}, error, sync::{Arc, Condvar, Mutex}};
 
 use crate::{DecompressionFailed, EncoderStreamError, Header, types::DynamicHeader};
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Entry {
     header: Box<DynamicHeader>,
     size: usize,
@@ -36,7 +36,7 @@ impl Entry {
 }
 
 pub struct DynamicTable {
-    pub list: VecDeque<Entry>,
+    pub list: VecDeque<Box<Entry>>,
     pub current_size: usize,
     pub capacity: usize,
     // # 2.1.4
@@ -44,7 +44,10 @@ pub struct DynamicTable {
     pub known_received_count: usize,
     // set by SETTINGS_QPACK_MAX_TABLE_CAPACITY in SETTINGS frame
     pub max_capacity: usize,
-    cv: Arc<(Mutex<usize>, Condvar)>,
+    cv_insert_count: Arc<(Mutex<usize>, Condvar)>,
+    pub eviction_count: usize,
+    both_mapping: HashMap<(String, String), (Box<Entry>, usize)>,
+    key_mapping: HashMap<String, (Box<Entry>, usize)>,
 }
 
 lazy_static! {
@@ -54,28 +57,32 @@ lazy_static! {
 }
 
 impl DynamicTable {
-    pub fn new(max_capacity: usize, cv: Arc<(Mutex<usize>, Condvar)>) -> Self {
+    pub fn new(max_capacity: usize, cv_insert_count: Arc<(Mutex<usize>, Condvar)>) -> Self {
         Self {
-            list: VecDeque::<Entry>::new(),
+            list: VecDeque::<Box<Entry>>::new(),
             current_size: 0,
             capacity: 0,
             known_received_count: 0,
             max_capacity,
-            cv
+            cv_insert_count,
+            eviction_count: 0,
+            both_mapping: HashMap::new(),
+            key_mapping: HashMap::new(),
         }
     }
     pub fn get_insert_count(&self) -> usize {
-        let (mux, _) = &*self.cv;
+        let (mux, _) = &*self.cv_insert_count;
         *mux.lock().unwrap()
     }
     pub fn get_entry_len(&self) -> usize {
         self.list.len()
     }
-    fn increment_insert_count(&mut self) {
-        let (mux, cv) = &*self.cv;
+    fn increment_insert_count(&mut self) -> usize {
+        let (mux, cv) = &*self.cv_insert_count;
         let mut insert_count = mux.lock().unwrap();
         *insert_count += 1;
         cv.notify_all();
+        *insert_count
     }
     pub fn ack_section(&mut self, section: usize, ids: Vec<usize>) {
         ids.iter().for_each(|id| {
@@ -122,11 +129,34 @@ impl DynamicTable {
             idx += 1;
         }
         while idx > 0 {
-            self.list.pop_front();
+            let entry = self.list.pop_front();
+            self.remove_entry_mapping(entry.unwrap());
+            self.eviction_count += 1;
             idx -= 1;
         }
         self.current_size = current_size;
         Ok(())
+    }
+    fn insert_entry_mapping(&mut self, entry: Box<Entry>, insert_count: usize) {
+        let header = entry.header.clone();
+        self.both_mapping.insert((*header.0.clone(), header.1), (entry.clone(), insert_count-1));
+        self.key_mapping.insert(*header.0, (entry, insert_count-1));
+    }
+    fn remove_entry_mapping(&mut self, entry: Box<Entry>) {
+        let header = entry.header.clone();
+        let both_key = (*header.0.clone(), header.1);
+        let key_key = *header.0;
+        if let Some(found) = self.both_mapping.get(&both_key) {
+            if found.1 == self.eviction_count {
+                self.both_mapping.remove(&both_key);
+            }
+        }
+
+        if let Some(found) = self.key_mapping.get(&key_key) {
+            if found.1 == self.eviction_count {
+                self.key_mapping.remove(&key_key);
+            }
+        }
     }
     pub fn dump_entries(&self) {
         // TODO: selective output target to do test table contents
@@ -144,25 +174,13 @@ impl DynamicTable {
         }
     }
     pub fn find_index(&self, target: &Header) -> (bool, usize) {
-        // TODO: really bad design due to linked list
-        let mut candidate_idx = usize::MAX;
-        if self.current_size == 0 {
-            return (false, candidate_idx);
+        if let Some(found) = self.both_mapping.get(&(target.get_name().value.clone(), target.get_value().value.clone())) {
+            return (true, found.1 - self.eviction_count);
         }
-        // relative from base opposit end
-        let mut abs_idx = self.list.len();
-        for entry in self.list.iter().rev() {
-            if (&*entry.header.0).eq(&target.get_name().value) {
-                if entry.header.1.eq(&target.get_value().value) {
-                    return (true, abs_idx-1);
-                }
-                if candidate_idx == usize::MAX {
-                    candidate_idx = abs_idx-1;
-                }
-            }
-            abs_idx -= 1;
+        if let Some(found) = self.key_mapping.get(&target.get_name().value) {
+            return (false, found.1 - self.eviction_count);
         }
-        (false, candidate_idx)
+        (false, usize::MAX)
     }
     pub fn ref_entry_at(&mut self, idx: usize) -> Result<(), Box<dyn error::Error>> {
         match self.list.get_mut(idx) {
@@ -178,24 +196,25 @@ impl DynamicTable {
         }
         Ok(())
     }
-    pub fn insert_table_entry(&mut self, entry: Entry) -> Result<(), Box<dyn error::Error>> {
+    pub fn insert_table_entry(&mut self, entry: Box<Entry>) -> Result<(), Box<dyn error::Error>> {
         let size = entry.size;
         if self.capacity < size {
             return Err(EncoderStreamError.into());
         }
         self.evict_upto(self.capacity - size)?;
-        self.list.push_back(entry);
+        self.list.push_back(entry.clone());
 
-        self.increment_insert_count();
+        let insert_count = self.increment_insert_count();
+        self.insert_entry_mapping(entry, insert_count);
 
         self.current_size += size;
         Ok(())
     }
     // TODO: insert to diverse for each type (ref, copy etc.)
     pub fn insert_header(&mut self, header: Header) -> Result<(), Box<dyn error::Error>> {
-        self.insert_table_entry(Entry::new(Box::new(header.into())))
+        self.insert_table_entry(Box::new(Entry::new(Box::new(header.into()))))
     }
-    pub fn get_entry(&self, abs_idx: usize) -> Result<Entry, Box<dyn error::Error>> {
+    pub fn get_entry(&self, abs_idx: usize) -> Result<Box<Entry>, Box<dyn error::Error>> {
         match self.list.get(abs_idx) {
             Some(entry) => Ok((*entry).clone()),
             None => Err(DecompressionFailed.into())
@@ -251,7 +270,7 @@ mod test {
 
     fn verify_insert(table: &DynamicTable, expected_size: usize, expected_insert_count: usize, expected_list_len: usize) {
         assert_eq!(table.current_size, expected_size);
-        let (mux, _) = &*table.cv;
+        let (mux, _) = &*table.cv_insert_count;
         let insert_count = mux.lock().unwrap();
         assert_eq!(*insert_count, expected_insert_count);
         assert_eq!(table.list.len(), expected_list_len);
@@ -285,7 +304,7 @@ mod test {
         let _ = table.set_capacity(cap);
         let header = Box::new(DynamicHeader::from_str(":path", "/index.html"));
         let size = header.size();
-        let out = table.insert_table_entry(Entry::new(header));
+        let out = table.insert_table_entry(Box::new(Entry::new(header)));
         assert_eq!(out.unwrap(), ());
         verify_insert(&table, size, 1, 1);
     }
@@ -295,7 +314,7 @@ mod test {
         let mut table = gen_table();
         let _ = table.set_capacity(cap);
         let header = Box::new(DynamicHeader::from_str(":path", "/index.html"));
-        let out = table.insert_table_entry(Entry::new(header)).unwrap_err();
+        let out = table.insert_table_entry(Box::new(Entry::new(header))).unwrap_err();
         assert!(out.downcast_ref::<EncoderStreamError>().is_some());
         verify_insert(&table, 0, 0, 0);
     }
