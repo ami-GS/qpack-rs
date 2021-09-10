@@ -7,7 +7,7 @@ use crate::transformer::encoder::Encoder;
 use crate::types::{HeaderString, StrHeader};
 use crate::{DecompressionFailed, Header};
 
-use self::dynamic_table::{DynamicTable, Entry};
+use self::dynamic_table::{CommitFuncWithDynamicTable, DynamicTable, Entry};
 
 pub struct Table {
     pub dynamic_table: Arc<RwLock<DynamicTable>>,
@@ -78,8 +78,7 @@ impl Table {
         self.dynamic_table.read().unwrap().get_entry(self.calc_abs_index(base, idx, post_base))
     }
     pub fn set_dynamic_table_capacity(&self, capacity: usize)
-        -> Result<Box<dyn FnOnce(&mut RwLockWriteGuard<DynamicTable>) -> Result<(), Box<dyn error::Error>>>,
-                    Box<dyn error::Error>> {
+    -> Result<CommitFuncWithDynamicTable, Box<dyn error::Error>> {
         Ok(Box::new(move |dynamic_table: &mut RwLockWriteGuard<DynamicTable>| -> Result<(), Box<dyn error::Error>> {
             dynamic_table.set_capacity(capacity)
         }))
@@ -87,8 +86,7 @@ impl Table {
 
     // commit func of decoding encoder instructions
     pub fn insert_refer_name(&self, idx: usize, value: HeaderString, on_static: bool)
-        -> Result<Box<dyn FnOnce(&mut RwLockWriteGuard<DynamicTable>) -> Result<(), Box<dyn error::Error>>>,
-                    Box<dyn error::Error>> {
+    -> Result<CommitFuncWithDynamicTable, Box<dyn error::Error>> {
         if on_static {
             let mut header = self.get_header_from_static(idx)?;
             header.set_value(value);
@@ -102,15 +100,13 @@ impl Table {
         }));
     }
     pub fn insert_both_literal(&self, header: Header)
-        -> Result<Box<dyn FnOnce(&mut RwLockWriteGuard<DynamicTable>) -> Result<(), Box<dyn error::Error>>>,
-                    Box<dyn error::Error>> {
+    -> Result<CommitFuncWithDynamicTable, Box<dyn error::Error>> {
         Ok(Box::new(move |dynamic_table: &mut RwLockWriteGuard<DynamicTable>| -> Result<(), Box<dyn error::Error>> {
             dynamic_table.insert_header(header)
         }))
     }
     pub fn duplicate(&self, idx: usize)
-        -> Result<Box<dyn FnOnce(&mut RwLockWriteGuard<DynamicTable>) -> Result<(), Box<dyn error::Error>>>,
-                    Box<dyn error::Error>> {
+    -> Result<CommitFuncWithDynamicTable, Box<dyn error::Error>> {
         let entry = self.get_entry_from_dynamic(self.get_insert_count(), idx, false)?;
         Ok(Box::new(move |dynamic_table: &mut RwLockWriteGuard<DynamicTable>| -> Result<(), Box<dyn error::Error>> {
             dynamic_table.insert_table_entry(Box::new(Entry::duplicate(*entry)))
@@ -119,8 +115,7 @@ impl Table {
 
     // commit func of decoding decoder instructions
     pub fn insert_count_increment(&self, increment: usize)
-    -> Result<Box<dyn FnOnce(&mut RwLockWriteGuard<DynamicTable>) -> Result<(), Box<dyn error::Error>>>,
-                Box<dyn error::Error>> {
+    -> Result<CommitFuncWithDynamicTable, Box<dyn error::Error>> {
         Ok(Box::new(move |dynamic_table: &mut RwLockWriteGuard<DynamicTable>| -> Result<(), Box<dyn error::Error>> {
             dynamic_table.known_received_count += increment;
             Ok(())
@@ -128,8 +123,7 @@ impl Table {
     }
     // TODO: want to lock only encoder.pending_sections
     pub fn section_ackowledgment(&self, encoder: Arc<RwLock<Encoder>>, stream_id: u16)
-    -> Result<Box<dyn FnOnce(&mut RwLockWriteGuard<DynamicTable>) -> Result<(), Box<dyn error::Error>>>,
-                Box<dyn error::Error>> {
+    -> Result<CommitFuncWithDynamicTable, Box<dyn error::Error>> {
         Ok(Box::new(move |dynamic_table: &mut RwLockWriteGuard<DynamicTable>| -> Result<(), Box<dyn error::Error>> {
             let (section, ref_ids) = encoder.write().unwrap().ack_section(stream_id);
             dynamic_table.ack_section(section, ref_ids);
@@ -137,8 +131,7 @@ impl Table {
         }))
     }
     pub fn stream_cancellation(&self, encoder: Arc<RwLock<Encoder>>, stream_id: u16)
-    -> Result<Box<dyn FnOnce(&mut RwLockWriteGuard<DynamicTable>) -> Result<(), Box<dyn error::Error>>>,
-                Box<dyn error::Error>> {
+    -> Result<CommitFuncWithDynamicTable, Box<dyn error::Error>> {
         Ok(Box::new(move |dynamic_table: &mut RwLockWriteGuard<DynamicTable>| -> Result<(), Box<dyn error::Error>> {
             let indices = encoder.write().unwrap().cancel_section(stream_id);
             dynamic_table.cancel_section(indices);

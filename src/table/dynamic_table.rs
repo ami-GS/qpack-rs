@@ -1,6 +1,8 @@
-use std::{collections::{HashMap, VecDeque}, error, sync::{Arc, Condvar, Mutex}};
+use std::{collections::{HashMap, VecDeque}, error, sync::{Arc, Condvar, Mutex, RwLockWriteGuard}};
 
 use crate::{DecompressionFailed, EncoderStreamError, Header, types::DynamicHeader};
+
+pub type CommitFuncWithDynamicTable = Box<dyn FnOnce(&mut RwLockWriteGuard<DynamicTable>) -> Result<(), Box<dyn error::Error>>>;
 
 #[derive(Clone, Debug)]
 pub struct Entry {
