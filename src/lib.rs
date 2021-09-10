@@ -110,10 +110,7 @@ impl Qpack {
         }))
     }
 
-    fn get_prefix_meta_data(&self, find_index_results: &Vec<(bool, bool, usize)>, refer_dynamic_table: bool) -> (usize, bool, u32) {
-        if !refer_dynamic_table {
-            return (0, false, 0);
-        }
+    fn get_prefix_meta_data(&self, find_index_results: &Vec<(bool, bool, usize)>) -> (usize, bool, u32) {
         // if same distribusion, then post base.
         // currently just range
         let mut min_max = (usize::MAX, usize::MIN);
@@ -149,7 +146,7 @@ impl Qpack {
     pub fn encode_headers(&self, encoded: &mut Vec<u8>, headers: Vec<Header>, stream_id: u16)
             -> Result<CommitFunc, Box<dyn error::Error>> {
         let find_index_results = self.table.find_headers(&headers);
-        let (required_insert_count, post_base, base) = self.get_prefix_meta_data(&find_index_results, true);
+        let (required_insert_count, post_base, base) = self.get_prefix_meta_data(&find_index_results);
         Encoder::prefix(encoded,
                         &self.table,
                         required_insert_count as u32,
