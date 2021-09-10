@@ -17,18 +17,18 @@ pub struct Qpack {
     decoder: Arc<RwLock<Decoder>>,
     table: Table,
     blocked_streams_limit: u16,
-    cv: Arc<(Mutex<usize>, Condvar)>,
+    cv_insert_count: Arc<(Mutex<usize>, Condvar)>,
 }
 
 impl Qpack {
     pub fn new(blocked_streams_limit: u16, dynamic_table_max_capacity: usize) -> Self {
-        let cv = Arc::new((Mutex::new(0), Condvar::new()));
+        let cv_insert_count = Arc::new((Mutex::new(0), Condvar::new()));
         Qpack {
             encoder: Arc::new(RwLock::new(Encoder::new())),
             decoder: Arc::new(RwLock::new(Decoder::new())),
-            table: Table::new(dynamic_table_max_capacity, Arc::clone(&cv)),
+            table: Table::new(dynamic_table_max_capacity, Arc::clone(&cv_insert_count)),
             blocked_streams_limit,
-            cv,
+            cv_insert_count,
         }
     }
     pub fn is_insertable(&self, headers: &Vec<Header>) -> bool {
@@ -205,7 +205,7 @@ impl Qpack {
         }
         self.decoder.write().unwrap().current_blocked_streams += 1;
 
-        let (mux, cv) = &*self.cv;
+        let (mux, cv) = &*self.cv_insert_count;
 
         let locked_insert_count = mux.lock().unwrap();
         let _ = cv.wait_while(locked_insert_count, |locked_insert_count| *locked_insert_count < required_insert_count).unwrap();
