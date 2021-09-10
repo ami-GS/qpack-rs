@@ -145,6 +145,9 @@ impl Table {
     pub fn get_insert_count(&self) -> usize {
         self.dynamic_table.read().unwrap().get_insert_count()
     }
+    pub fn get_eviction_count(&self) -> usize {
+        self.dynamic_table.read().unwrap().eviction_count
+    }
     pub fn get_dynamic_table_entry_len(&self) -> usize {
         self.dynamic_table.read().unwrap().get_entry_len()
     }

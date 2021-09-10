@@ -129,11 +129,9 @@ impl Qpack {
         if min_max == (usize::MAX, usize::MIN) {
             return (0, false, 0);
         }
-        let insert_count = self.table.get_insert_count();
         let entry_len = self.table.get_dynamic_table_entry_len();
-        let evicted_count = insert_count - entry_len;
+        let required_insert_count = min_max.1 + 1 + self.table.get_eviction_count();
 
-        let required_insert_count = min_max.1 + 1 + evicted_count;
         // WARN: if min_max uses abs_index, entry_len to be insert_count
         let post_base = ((min_max.0 + min_max.1) / 2) < entry_len / 2;
         (
