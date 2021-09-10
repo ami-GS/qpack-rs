@@ -59,13 +59,13 @@ impl Qpack {
             }
         }
 
-        let known_sending_count = Arc::clone(&self.encoder.read().unwrap().known_sending_count);
+        let encoder = Arc::clone(&self.encoder);
         let dynamic_table = Arc::clone(&self.table.dynamic_table);
         Ok(Box::new(move || -> Result<(), Box<dyn error::Error>> {
             let count = commit_funcs.len();
             let mut locked_table = dynamic_table.write().unwrap();
             commit_funcs.into_iter().try_for_each(|f| f(&mut locked_table))?;
-            (*known_sending_count.write().unwrap()) += count;
+            encoder.write().unwrap().known_sending_count += count;
             Ok(())
         }))
     }
@@ -305,7 +305,7 @@ impl Qpack {
                 len
             } else { // wire[idx] & Instruction::INSERT_COUNT_INCREMENT == Instruction::INSERT_COUNT_INCREMENT
                 let (len, increment) = Encoder::decode_insert_count_increment(wire, idx)?;
-                if increment == 0 || *self.encoder.read().unwrap().known_sending_count.read().unwrap() < self.table.dynamic_table.read().unwrap().known_received_count + increment {
+                if increment == 0 || self.encoder.read().unwrap().known_sending_count < self.table.dynamic_table.read().unwrap().known_received_count + increment {
                     // 4.4.3 invalid value
                     return Err(DecoderStreamError.into());
                 }

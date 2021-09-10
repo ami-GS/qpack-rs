@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::error;
-use std::sync::{Arc, RwLock};
 
 use crate::types::HeaderString;
 use crate::{FieldType, table::Table, Header};
@@ -18,7 +17,7 @@ impl Instruction {
 pub struct Encoder {
     // $2.1.1.1
     _draining_idx: u32,
-    pub known_sending_count: Arc<RwLock<usize>>, // TODO: requred?
+    pub known_sending_count: usize, // TODO: requred?
     pub pending_sections: HashMap<u16, (usize, Vec<usize>)>,
 }
 
@@ -26,7 +25,7 @@ impl Encoder {
     pub fn new() -> Self {
         Self {
             _draining_idx: 0,
-            known_sending_count: Arc::new(RwLock::new(0)),
+            known_sending_count: 0,
             pending_sections: HashMap::new(),
         }
     }
