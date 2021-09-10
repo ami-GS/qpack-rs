@@ -46,8 +46,8 @@ pub struct DynamicTable {
     pub max_capacity: usize,
     cv_insert_count: Arc<(Mutex<usize>, Condvar)>,
     pub eviction_count: usize,
-    both_mapping: HashMap<(String, String), (Box<Entry>, usize)>,
-    key_mapping: HashMap<String, (Box<Entry>, usize)>,
+    both_mapping: HashMap<(String, String), usize>,
+    key_mapping: HashMap<String, usize>,
 }
 
 lazy_static! {
@@ -139,21 +139,21 @@ impl DynamicTable {
     }
     fn insert_entry_mapping(&mut self, entry: Box<Entry>, insert_count: usize) {
         let header = entry.header.clone();
-        self.both_mapping.insert((*header.0.clone(), header.1), (entry.clone(), insert_count-1));
-        self.key_mapping.insert(*header.0, (entry, insert_count-1));
+        self.both_mapping.insert((*header.0.clone(), header.1), insert_count-1);
+        self.key_mapping.insert(*header.0, insert_count-1);
     }
     fn remove_entry_mapping(&mut self, entry: Box<Entry>) {
         let header = entry.header.clone();
         let both_key = (*header.0.clone(), header.1);
         let key_key = *header.0;
-        if let Some(found) = self.both_mapping.get(&both_key) {
-            if found.1 == self.eviction_count {
+        if let Some(abs_index) = self.both_mapping.get(&both_key) {
+            if *abs_index == self.eviction_count {
                 self.both_mapping.remove(&both_key);
             }
         }
 
-        if let Some(found) = self.key_mapping.get(&key_key) {
-            if found.1 == self.eviction_count {
+        if let Some(abs_index) = self.key_mapping.get(&key_key) {
+            if *abs_index == self.eviction_count {
                 self.key_mapping.remove(&key_key);
             }
         }
@@ -174,11 +174,11 @@ impl DynamicTable {
         }
     }
     pub fn find_index(&self, target: &Header) -> (bool, usize) {
-        if let Some(found) = self.both_mapping.get(&(target.get_name().value.clone(), target.get_value().value.clone())) {
-            return (true, found.1 - self.eviction_count);
+        if let Some(abs_index) = self.both_mapping.get(&(target.get_name().value.clone(), target.get_value().value.clone())) {
+            return (true, abs_index - self.eviction_count);
         }
-        if let Some(found) = self.key_mapping.get(&target.get_name().value) {
-            return (false, found.1 - self.eviction_count);
+        if let Some(abs_index) = self.key_mapping.get(&target.get_name().value) {
+            return (false, abs_index - self.eviction_count);
         }
         (false, usize::MAX)
     }
