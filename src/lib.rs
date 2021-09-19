@@ -204,6 +204,7 @@ impl Qpack {
 
         let locked_insert_count = mux.lock().unwrap();
         let _ = cv.wait_while(locked_insert_count, |locked_insert_count| *locked_insert_count < required_insert_count).unwrap();
+        self.decoder.write().unwrap().current_blocked_streams -= 1;
         Ok(())
     }
     pub fn decode_headers(&self, wire: &Vec<u8>, stream_id: u16) -> Result<(Vec<Header>, bool), Box<dyn error::Error>> {
@@ -486,17 +487,17 @@ mod tests {
         let commit_func = server.decode_encoder_instruction(&encoded);
         commit(commit_func);
     }
-    fn send_headers(client: &Qpack, server: &Qpack, headers: Vec<Header>) -> bool {
+    fn send_headers(client: &Qpack, server: &Qpack, headers: Vec<Header>, stream_id: u16) -> bool {
         let mut encoded = vec![];
-        let commit_func = client.encode_headers(&mut encoded, headers.clone(), STREAM_ID);
+        let commit_func = client.encode_headers(&mut encoded, headers.clone(), stream_id);
         commit(commit_func);
-        let out = server.decode_headers(&encoded, STREAM_ID).unwrap();
+        let out = server.decode_headers(&encoded, stream_id).unwrap();
         assert_eq!(headers, out.0);
         out.1
     }
-    fn section_ackowledgment(client: &Qpack, server: &Qpack) {
+    fn section_ackowledgment(client: &Qpack, server: &Qpack, stream_id: u16) {
         let mut encoded = vec![];
-        let commit_func = server.encode_section_ackowledgment(&mut encoded, STREAM_ID);
+        let commit_func = server.encode_section_ackowledgment(&mut encoded, stream_id);
         commit(commit_func);
         let commit_func = client.decode_decoder_instruction(&encoded);
         commit(commit_func);
@@ -511,9 +512,9 @@ mod tests {
 
     fn insert_send_ack(encoder: &Qpack, decoder: &Qpack, headers: Vec<Header>, dump_table: bool) {
         insert_headers(encoder, decoder, headers.clone());
-        let refer_dynamic_table = send_headers(encoder, decoder, headers.clone());
+        let refer_dynamic_table = send_headers(encoder, decoder, headers.clone(), STREAM_ID);
         if refer_dynamic_table {
-            section_ackowledgment(encoder, decoder);
+            section_ackowledgment(encoder, decoder, STREAM_ID);
         }
         if dump_table {
             encoder.dump_dynamic_table();
@@ -525,7 +526,7 @@ mod tests {
     fn simple_get() {
         let (qpack_encoder, qpack_decoder) = gen_client_server_instances(1, 1024);
         let request_headers = get_request_headers(false);
-        let refer_dynamic_table = send_headers(&qpack_encoder, &qpack_decoder, request_headers.clone());
+        let refer_dynamic_table = send_headers(&qpack_encoder, &qpack_decoder, request_headers.clone(), STREAM_ID);
         assert!(!refer_dynamic_table);
     }
 
@@ -534,15 +535,15 @@ mod tests {
         let (qpack_encoder, qpack_decoder) = gen_client_server_instances(1, 1024);
         let mut request_headers = get_request_headers(false);
         request_headers.iter_mut().for_each(|header| header.set_huffman((true, true)));
-        let refer_dynamic_table = send_headers(&qpack_encoder, &qpack_decoder, request_headers.clone());
+        let refer_dynamic_table = send_headers(&qpack_encoder, &qpack_decoder, request_headers.clone(), STREAM_ID);
         assert!(!refer_dynamic_table);
 
         request_headers.iter_mut().for_each(|header| header.set_huffman((true, false)));
-        let refer_dynamic_table = send_headers(&qpack_encoder, &qpack_decoder, request_headers.clone());
+        let refer_dynamic_table = send_headers(&qpack_encoder, &qpack_decoder, request_headers.clone(), STREAM_ID);
         assert!(!refer_dynamic_table);
 
         request_headers.iter_mut().for_each(|header| header.set_huffman((false, true)));
-        let refer_dynamic_table = send_headers(&qpack_encoder, &qpack_decoder, request_headers.clone());
+        let refer_dynamic_table = send_headers(&qpack_encoder, &qpack_decoder, request_headers.clone(), STREAM_ID);
         assert!(!refer_dynamic_table);
     }
 
@@ -551,7 +552,7 @@ mod tests {
         let (qpack_encoder, qpack_decoder) = gen_client_server_instances(1, 1024);
         let mut request_headers = get_request_headers(false);
         request_headers.iter_mut().for_each(|header| header.set_sensitive(true));
-        let refer_dynamic_table = send_headers(&qpack_encoder, &qpack_decoder, request_headers);
+        let refer_dynamic_table = send_headers(&qpack_encoder, &qpack_decoder, request_headers, STREAM_ID);
         assert!(!refer_dynamic_table);
     }
 
@@ -561,15 +562,15 @@ mod tests {
         let mut request_headers = get_request_headers(false);
         request_headers.iter_mut().for_each(|header| header.set_sensitive(true));
         request_headers.iter_mut().for_each(|header| header.set_huffman((true, true)));
-        let refer_dynamic_table = send_headers(&qpack_encoder, &qpack_decoder, request_headers.clone());
+        let refer_dynamic_table = send_headers(&qpack_encoder, &qpack_decoder, request_headers.clone(), STREAM_ID);
         assert!(!refer_dynamic_table);
 
         request_headers.iter_mut().for_each(|header| header.set_huffman((true, false)));
-        let refer_dynamic_table = send_headers(&qpack_encoder, &qpack_decoder, request_headers.clone());
+        let refer_dynamic_table = send_headers(&qpack_encoder, &qpack_decoder, request_headers.clone(), STREAM_ID);
         assert!(!refer_dynamic_table);
 
         request_headers.iter_mut().for_each(|header| header.set_huffman((false, true)));
-        let refer_dynamic_table = send_headers(&qpack_encoder, &qpack_decoder, request_headers.clone());
+        let refer_dynamic_table = send_headers(&qpack_encoder, &qpack_decoder, request_headers.clone(), STREAM_ID);
         assert!(!refer_dynamic_table);
 
     }
@@ -591,7 +592,7 @@ mod tests {
         let mut request_headers = get_request_headers(true);
         request_headers = request_headers[..request_headers.len()/2-2].to_vec();
 
-        let refer_dynamic_table = send_headers(&qpack_encoder, &qpack_decoder, request_headers);
+        let refer_dynamic_table = send_headers(&qpack_encoder, &qpack_decoder, request_headers, STREAM_ID);
         assert!(refer_dynamic_table);
     }
 
@@ -658,6 +659,7 @@ mod tests {
         insert_headers(&client, &server, headers);
         let headers = get_request_headers(false);
         let refer_dynamic_table = send_headers(&client, &server, headers);
+        let refer_dynamic_table = send_headers(&client, &server, headers, STREAM_ID);
         assert!(refer_dynamic_table);
     }
 
@@ -722,30 +724,57 @@ mod tests {
         assert_eq!(encoded, vec![0x3f, 0xbd, 0x01]);
     }
     #[test]
-    fn blocking() {
-        let (qpack_encoder, qpack_decoder) = gen_client_server_instances(1, 4096);
-        let qpack_encoder = Arc::new(qpack_encoder);
-        let qpack_decoder = Arc::new(qpack_decoder);
+    fn blocking_multi() {
         let request_headers = get_request_headers(false);
+        let delay_func = |qpack_encoder: Arc<Qpack>, qpack_decoder: Arc<Qpack>, headers: Vec<Header>, delay: u64, insert_headers_packet: Vec<u8>, stream_id: u16| {
+            // header insertion arrives after starting decoding headers
+            let copied_dec = Arc::clone(&qpack_decoder);
+            let th = thread::spawn(move || {
+                thread::sleep(time::Duration::from_millis(delay*20));
+                let commit_func = copied_dec.decode_encoder_instruction(&insert_headers_packet);
+                commit(commit_func);
+            });
+            // send_headers is called technically random order
+            let refer_dynamic_table = send_headers(&qpack_encoder, &qpack_decoder, headers, stream_id);
+            if refer_dynamic_table {
+                section_ackowledgment(&qpack_encoder, &qpack_decoder, stream_id);
+            }
+            let _ = th.join();
+        };
+        for batch_size in 1..=request_headers.len() {
+            let mut request_headers_batched = vec![];
+            let mut i = 0;
+            while i < request_headers.len() {
+                if request_headers.len() - i < batch_size {
+                    request_headers_batched.push(request_headers[i..].to_vec());
+                } else {
+                    request_headers_batched.push(request_headers[i..i+batch_size].to_vec());
+                }
+                i += batch_size;
+            }
+            let num_threads = request_headers_batched.len();
 
-        let mut insert_headers_packet = vec![];
-        let commit_func = qpack_encoder.encode_insert_headers(&mut insert_headers_packet, request_headers.clone());
-        commit(commit_func);
+            let (qpack_encoder, qpack_decoder) = gen_client_server_instances(num_threads as u16, 4096);
+            let qpack_encoder = Arc::new(qpack_encoder);
+            let qpack_decoder = Arc::new(qpack_decoder);
+            let mut ths = vec![];
+            for (i, headers) in request_headers_batched.into_iter().enumerate() {
+                let f = delay_func.clone();
+                let mut insert_headers_packet = vec![];
+                let commit_func = qpack_encoder.encode_insert_headers(&mut insert_headers_packet, headers.clone());
+                commit(commit_func);
 
-        // header insertion arrives after starting decoding headers
-        let copied_dec = Arc::clone(&qpack_decoder);
-        let th = thread::spawn(move || {
-            let dur = time::Duration::from_secs(2);
-            thread::sleep(dur);
-            let commit_func = copied_dec.decode_encoder_instruction(&insert_headers_packet);
-            commit(commit_func);
-        });
-
-        let refer_dynamic_table = send_headers(&qpack_encoder, &qpack_decoder, request_headers);
-        if refer_dynamic_table {
-            section_ackowledgment(&qpack_encoder, &qpack_decoder);
+                let enc_clone = Arc::clone(&qpack_encoder);
+                let dec_clone = Arc::clone(&qpack_decoder);
+                ths.push(thread::spawn(move || {
+                    // delay is for encoder/decoder instructions arrive serially
+                    f(enc_clone, dec_clone, headers, i as u64, insert_headers_packet, i as u16 * 2);
+                }));
+            }
+            for th in ths {
+                let _ = th.join();
+            }
         }
-        let _ = th.join();
     }
 
     #[test]
